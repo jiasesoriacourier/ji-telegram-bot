@@ -8,7 +8,7 @@ const nodemailer = require('nodemailer');
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const SPREADSHEET_ID = '10Y0tg1kh6UrVtEzSj_0JGsP7GmydRabM5imlEXTwjLM';
 const ADMIN_EMAIL = 'jiasesoriacourier@gmail.com';
-const ADMIN_PASSWORD = process.env.ADMIN_EMAIL_PASSWORD; // SMTP password (App Password)
+const ADMIN_EMAIL_PASSWORD = process.env.ADMIN_EMAIL_PASSWORD;
 
 if (!TELEGRAM_TOKEN) {
   throw new Error('Falta TELEGRAM_TOKEN en variables de entorno');
@@ -22,25 +22,15 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 const url = process.env.RENDER_EXTERNAL_URL || 'http://localhost:3000';
 bot.setWebHook(`${url}/${TELEGRAM_TOKEN}`);
 
-// === ESTADO POR USUARIO (en memoria, persistente por sesión) ===
-const userStates = new Map(); // chatId -> estado
-
-// === MIDDLEWARE WEBHOOK ===
-app.post(`/${TELEGRAM_TOKEN}`, (req, res) => {
-  res.sendStatus(200); // Telegram requiere 200 inmediato
-  bot.processUpdate(req.body);
-});
-
-app.get('/', (req, res) => {
-  res.send('✅ Bot de Telegram activo - J.I Asesoría & Courier');
-});
+// === ESTADO POR USUARIO ===
+const userStates = new Map();
 
 // === LISTAS DE CLASIFICACIÓN ===
 const MERCANCIA_ESPECIAL = [
   "colonias","perfume","perfumes","cremas","crema","cosmetico","cosmético","cosmeticos","cosméticos","maquillaje",
-  "medicamento","medicamentos","medicina","medicinas","suplemento","suplementos","vitamina","vitaminas",
-  "alimento","alimentos","enlatado","enlatados","semilla","semillas","agroquimico","agroquímico","fertilizante",
-  "lentes de contacto","lentes","quimico","químico","producto de limpieza","limpieza","bebida","bebidas","jarabe","tableta","capsula","cápsula"
+  "medicamento","medicinas","suplemento","suplementos","vitamina","vitaminas",
+  "alimento","alimentos","semilla","semillas","agroquimico","agroquímico","fertilizante",
+  "lentes de contacto","quimico","químico","producto de limpieza","limpieza","bebida","bebidas","jarabe","tableta","capsula","cápsula"
 ];
 
 const MERCANCIA_PROHIBIDA = [
@@ -54,33 +44,39 @@ const KNOWN_BRANDS = [
   "bulgari","bvlgari","rolex","pandora","piaget","graff","chopard","tous","david yurman","victoria's secret"
 ];
 
+// === MIDDLEWARE WEBHOOK ===
+app.post(`/${TELEGRAM_TOKEN}`, (req, res) => {
+  res.sendStatus(200);
+  bot.processUpdate(req.body);
+});
+
+app.get('/', (req, res) => {
+  res.send('✅ Bot de Telegram activo - J.I Asesoría & Courier');
+});
+
 // === FUNCIONES DE CLASIFICACIÓN ===
 function classifyProduct(obj) {
   const text = (obj.descripcion || '').toLowerCase();
   const categoriaSeleccionada = (obj.categoriaSeleccionada || '').toLowerCase();
-  const destino = (obj.destino || '').toLowerCase();
+  const origen = (obj.origen || '').toLowerCase();
 
-  // Prohibidas
   for (const w of MERCANCIA_PROHIBIDA) {
     if (text.includes(w)) return { tipo: 'Prohibida', tags: [w] };
   }
 
-  // Réplicas explícitas
   if (categoriaSeleccionada.includes('réplica') || categoriaSeleccionada.includes('replica')) {
-    return destino.includes('colombia') ? { tipo: 'Especial', tags: ['replica'] } : { tipo: 'General', tags: ['replica'] };
+    return origen === 'colombia' ? { tipo: 'Especial', tags: ['replica'] } : { tipo: 'General', tags: ['replica'] };
   }
 
-  // Palabras sensibles
   const foundSpecial = [];
   for (const w of MERCANCIA_ESPECIAL) {
     if (text.includes(w)) foundSpecial.push(w);
   }
   if (foundSpecial.length) return { tipo: 'Especial', tags: foundSpecial };
 
-  // Marcas reconocidas
   for (const b of KNOWN_BRANDS) {
     if (text.includes(b)) {
-      return destino.includes('colombia') ? { tipo: 'Especial', tags: ['brand:' + b] } : { tipo: 'General', tags: ['brand:' + b] };
+      return origen === 'colombia' ? { tipo: 'Especial', tags: ['brand:'+b] } : { tipo: 'General', tags: ['brand:'+b] };
     }
   }
 
@@ -103,11 +99,32 @@ function mainMenuKeyboard() {
 function categoriaInlineKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: 'Electrónicos', callback_data: 'CATEGORIA|Electrónicos' }, { text: 'Ropa / Calzado', callback_data: 'CATEGORIA|Ropa' }],
-      [{ text: 'Perfumería', callback_data: 'CATEGORIA|Perfumería' }, { text: 'Medicinas / Suplementos', callback_data: 'CATEGORIA|Medicinas' }],
-      [{ text: 'Alimentos', callback_data: 'CATEGORIA|Alimentos' }, { text: 'Cosméticos', callback_data: 'CATEGORIA|Cosméticos' }],
-      [{ text: 'Réplicas / Imitaciones', callback_data: 'CATEGORIA|Réplicas' }, { text: 'Piezas automotrices', callback_data: 'CATEGORIA|Automotriz' }],
-      [{ text: 'Documentos', callback_data: 'CATEGORIA|Documentos' }, { text: 'Otro', callback_data: 'CATEGORIA|Otro' }]
+      [{ text: 'Electrónicos', callback_ 'CATEGORIA|Electrónicos' }, { text: 'Ropa / Calzado', callback_ 'CATEGORIA|Ropa' }],
+      [{ text: 'Perfumería', callback_ 'CATEGORIA|Perfumería' }, { text: 'Medicinas / Suplementos', callback_ 'CATEGORIA|Medicinas' }],
+      [{ text: 'Alimentos', callback_ 'CATEGORIA|Alimentos' }, { text: 'Cosméticos', callback_ 'CATEGORIA|Cosméticos' }],
+      [{ text: 'Réplicas / Imitaciones', callback_ 'CATEGORIA|Réplicas' }, { text: 'Piezas automotrices', callback_ 'CATEGORIA|Automotriz' }],
+      [{ text: 'Documentos', callback_ 'CATEGORIA|Documentos' }, { text: 'Otro', callback_ 'CATEGORIA|Otro' }]
+    ]
+  };
+}
+
+function casilleroPaisesKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '🇺🇸 Miami (EE.UU.)', callback_ 'CASILLERO|miami' }],
+      [{ text: '🇪🇸 Madrid (España)', callback_ 'CASILLERO|espana' }],
+      [{ text: '🇨🇴 Bogotá / Medellín (Colombia)', callback_ 'CASILLERO|colombia' }],
+      [{ text: '🇲🇽 Ciudad de México', callback_ 'CASILLERO|mexico' }],
+      [{ text: '🇨🇳 Shanghái / Guangzhou (China)', callback_ 'CASILLERO|china' }]
+    ]
+  };
+}
+
+function colombiaPermisoKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '📦 Con permiso o réplicas', callback_ 'COL_CASILLERO|con' }],
+      [{ text: '📦 Sin permiso', callback_ 'COL_CASILLERO|sin' }]
     ]
   };
 }
@@ -125,6 +142,49 @@ function clearUserState(chatId) {
   userStates.delete(chatId);
 }
 
+// === GOOGLE SHEETS ===
+async function getGoogleSheetsClient() {
+  const auth = new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
+    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+  });
+  const client = await auth.getClient();
+  return google.sheets({ version: 'v4', auth: client });
+}
+
+function extractRange(data, startRow, endRow, startCol, endCol) {
+  const lines = [];
+  for (let r = startRow; r <= endRow; r++) {
+    if (r >= data.length) continue;
+    const row = data[r];
+    const cells = [];
+    for (let c = startCol; c <= endCol; c++) {
+      const cell = (row[c] || '').toString().trim();
+      if (cell) cells.push(cell);
+    }
+    if (cells.length > 0) lines.push(cells.join(' '));
+  }
+  return lines.join('\n');
+}
+
+async function getDirecciones(nombreCliente) {
+  const sheets = await getGoogleSheetsClient();
+  const sheet = sheets.spreadsheets.values;
+  const range = 'Direcciones!A:Z';
+  const data = (await sheet.get({ spreadsheetId: SPREADSHEET_ID, range })).data.values || [];
+
+  const replaceName = (text) => text.replace(/Nombre de cliente/gi, nombreCliente);
+
+  return {
+    miami: replaceName(extractRange(data, 1, 4, 1, 4)),      // B2:D5
+    espana: replaceName(extractRange(data, 16, 20, 1, 4)),   // B17:D21
+    colombiaCon: replaceName(extractRange(data, 1, 8, 6, 10)), // G2:J8
+    colombiaSin: replaceName(extractRange(data, 10, 17, 6, 10)), // G11:J17
+    mexico: replaceName(extractRange(data, 23, 28, 1, 4)),   // B24:D29
+    china: replaceName(extractRange(data, 23, 28, 6, 10))    // G24:J29
+  };
+}
+
 // === COMANDOS ===
 bot.onText(/\/start|\/ayuda|\/help/, (msg) => {
   const chatId = msg.chat.id;
@@ -139,17 +199,32 @@ bot.onText(/\/menu/, (msg) => {
   bot.sendMessage(chatId, 'Menú principal:', { reply_markup: mainMenuKeyboard() });
 });
 
+bot.onText(/\/mi_casillero/, async (msg) => {
+  const chatId = msg.chat.id;
+  bot.sendMessage(chatId, 'Selecciona el país de tu casillero:', { reply_markup: casilleroPaisesKeyboard() });
+});
+
 bot.onText(/\/cotizar/, (msg) => {
   const chatId = msg.chat.id;
   setUserState(chatId, { modo: 'COTIZAR_ORIGEN' });
-  bot.sendMessage(chatId, 'Comenzamos la cotización. ¿Cuál es el ORIGEN? (miami / españa / colombia / china / mexico)');
+  bot.sendMessage(chatId, 'Comenzamos la cotización. ¿Cuál es el ORIGEN?\n\nOpciones: miami, madrid, colombia, mexico, china');
+});
+
+bot.onText(/\/banner/, async (msg) => {
+  const chatId = msg.chat.id;
+  try {
+    const bannerUrl = 'https://i.imgur.com/qJnTEVD.jpg';
+    await bot.sendPhoto(chatId, bannerUrl);
+  } catch (error) {
+    bot.sendMessage(chatId, 'No pudimos enviar el banner.');
+  }
 });
 
 // === CALLBACKS ===
-bot.on('callback_query', (query) => {
+bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
-  bot.answerCallbackQuery(query.id);
+  await bot.answerCallbackQuery(query.id);
 
   if (data.startsWith('CATEGORIA|')) {
     const categoria = data.split('|')[1];
@@ -157,7 +232,35 @@ bot.on('callback_query', (query) => {
     state.categoriaSeleccionada = categoria;
     state.modo = 'COTIZAR_DESCRIPCION';
     setUserState(chatId, state);
-    bot.sendMessage(chatId, `Has seleccionado *${categoria}*. Ahora describe el producto (ej: "perfume 50ml", "par de tenis").`, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, `Has seleccionado *${categoria}*. Ahora describe el producto.`, { parse_mode: 'Markdown' });
+  }
+  else if (data.startsWith('CASILLERO|')) {
+    const pais = data.split('|')[1];
+    if (pais === 'colombia') {
+      bot.sendMessage(chatId, '¿Tu mercancía requiere permiso de importación?', { reply_markup: colombiaPermisoKeyboard() });
+    } else {
+      const nombre = query.from.first_name || 'Cliente';
+      const direcciones = await getDirecciones(nombre);
+      let direccion = 'No disponible';
+      if (pais === 'miami') direccion = direcciones.miami;
+      else if (pais === 'espana') direccion = direcciones.espana;
+      else if (pais === 'mexico') direccion = direcciones.mexico;
+      else if (pais === 'china') direccion = direcciones.china;
+      const nombresPaises = {
+        miami: 'Miami (EE.UU.)',
+        espana: 'Madrid (España)',
+        mexico: 'Ciudad de México',
+        china: 'China'
+      };
+      bot.sendMessage(chatId, `📍 *Dirección en ${nombresPaises[pais]}*:\n\n${direccion}`, { parse_mode: 'Markdown' });
+    }
+  }
+  else if (data.startsWith('COL_CASILLERO|')) {
+    const tipo = data.split('|')[1];
+    const nombre = query.from.first_name || 'Cliente';
+    const direcciones = await getDirecciones(nombre);
+    const direccion = tipo === 'con' ? direcciones.colombiaCon : direcciones.colombiaSin;
+    bot.sendMessage(chatId, `📍 *Dirección en Colombia (${tipo === 'con' ? 'Con permiso' : 'Sin permiso'})*:\n\n${direccion}`, { parse_mode: 'Markdown' });
   }
 });
 
@@ -176,10 +279,10 @@ bot.on('message', async (msg) => {
       state.origen = text.toLowerCase();
       state.modo = 'COTIZAR_DESTINO';
       setUserState(chatId, state);
-      bot.sendMessage(chatId, `Origen: ${state.origen}. Ahora indica el DESTINO (miami / españa / colombia / china / mexico).`);
+      bot.sendMessage(chatId, `Origen: ${state.origen}. Ahora indica el DESTINO (Costa Rica).`);
     }
     else if (state.modo === 'COTIZAR_DESTINO') {
-      state.destino = text.toLowerCase();
+      state.destino = 'costa rica';
       state.modo = 'COTIZAR_CATEGORIA';
       setUserState(chatId, state);
       bot.sendMessage(chatId, 'Selecciona la categoría de tu mercancía:', { reply_markup: categoriaInlineKeyboard() });
@@ -189,7 +292,7 @@ bot.on('message', async (msg) => {
       const classification = classifyProduct({
         descripcion: state.descripcion,
         categoriaSeleccionada: state.categoriaSeleccionada,
-        destino: state.destino
+        origen: state.origen
       });
 
       if (classification.tipo === 'Prohibida') {
@@ -210,10 +313,10 @@ bot.on('message', async (msg) => {
       state.unidad = pesoMatch[2].toLowerCase();
       state.modo = 'COTIZAR_EMAIL';
       setUserState(chatId, state);
-      bot.sendMessage(chatId, `Resumen:\nOrigen: ${state.origen}\nDestino: ${state.destino}\nTipo: ${state.tipoMercancia}\nDescripción: ${state.descripcion}\n\nIndica tu correo para enviar la cotización.`);
+      bot.sendMessage(chatId, `Resumen:\nOrigen: ${state.origen}\nTipo: ${state.tipoMercancia}\nDescripción: ${state.descripcion}\n\nIndica tu correo para enviar la cotización.`);
     }
     else if (state.modo === 'COTIZAR_EMAIL') {
-      if (!text.includes('@')) return bot.sendMessage(chatId, 'Correo inválido. Por favor, escribe un email válido.');
+      if (!text.includes('@')) return bot.sendMessage(chatId, 'Correo inválido.');
       
       state.email = text;
       const cotizacion = await calcularYRegistrarCotizacion(chatId, state);
@@ -230,27 +333,49 @@ bot.on('message', async (msg) => {
 // === CÁLCULO Y REGISTRO ===
 async function calcularYRegistrarCotizacion(chatId, state) {
   const tarifas = await leerTarifas();
-  const { origen, destino, peso, unidad, tipoMercancia, email } = state;
+  const { origen, peso, unidad, tipoMercancia, email } = state;
 
   let tarifa = 0;
   let pesoFacturable = 0;
   let unidadFacturable = 'lb';
   let subtotal = 0;
 
-  // Conversión y redondeo
   const pesoEnLb = unidad === 'kg' ? peso * 2.20462 : peso;
   const pesoEnKg = unidad === 'lb' ? peso / 2.20462 : peso;
+  const origenLower = origen.toLowerCase();
 
-  if (destino === 'colombia') {
-    tarifa = tipoMercancia === 'Especial' ? tarifas.colombia_especial_kg : tarifas.colombia_general_kg;
-    pesoFacturable = Math.ceil(pesoEnKg || peso);
+  if (origenLower === 'colombia') {
+    tarifa = tipoMercancia === 'Especial' ? tarifas.colombia.conPermiso : tarifas.colombia.sinPermiso;
+    pesoFacturable = Math.ceil(pesoEnKg);
     unidadFacturable = 'kg';
     subtotal = tarifa * pesoFacturable;
-  } else {
-    tarifa = tipoMercancia === 'Especial' ? tarifas.espana_especial_lb : tarifas.miami_general_lb;
-    pesoFacturable = Math.ceil(pesoEnLb || peso);
+  }
+  else if (origenLower === 'mexico') {
+    tarifa = tarifas.mexico.tarifa;
+    pesoFacturable = Math.ceil(pesoEnKg);
+    unidadFacturable = 'kg';
+    subtotal = tarifa * pesoFacturable;
+  }
+  else if (origenLower === 'china') {
+    tarifa = tarifas.china.tarifa;
+    pesoFacturable = Math.ceil(pesoEnLb);
     unidadFacturable = 'lb';
     subtotal = tarifa * pesoFacturable;
+  }
+  else if (origenLower === 'miami' || origenLower === 'usa') {
+    tarifa = tipoMercancia === 'Especial' ? tarifas.miami.conPermiso : tarifas.miami.sinPermiso;
+    pesoFacturable = Math.ceil(pesoEnLb);
+    unidadFacturable = 'lb';
+    subtotal = tarifa * pesoFacturable;
+  }
+  else if (origenLower === 'espana' || origenLower === 'madrid') {
+    tarifa = tipoMercancia === 'Especial' ? tarifas.espana.conPermiso : tarifas.espana.sinPermiso;
+    pesoFacturable = Math.ceil(pesoEnLb);
+    unidadFacturable = 'lb';
+    subtotal = tarifa * pesoFacturable;
+  }
+  else {
+    throw new Error("Origen no soportado. Usa: miami, madrid, colombia, mexico o china");
   }
 
   const total = subtotal;
@@ -259,7 +384,7 @@ async function calcularYRegistrarCotizacion(chatId, state) {
 
   // Guardar en Google Sheets (Historial)
   await guardarEnHistorial({
-    id, fecha, chatId, email, origen, destino, tipoMercancia, peso, unidad, pesoFacturable, tarifa, subtotal, total
+    id, fecha, chatId, email, origen, destino: 'Costa Rica', tipoMercancia, peso, unidad, pesoFacturable, tarifa, subtotal, total
   });
 
   // Generar y enviar PDF
@@ -269,16 +394,6 @@ async function calcularYRegistrarCotizacion(chatId, state) {
   return { id, total };
 }
 
-// === GOOGLE SHEETS ===
-async function getGoogleSheetsClient() {
-  const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets']
-  });
-  const client = await auth.getClient();
-  return google.sheets({ version: 'v4', auth: client });
-}
-
 async function leerTarifas() {
   const sheets = await getGoogleSheetsClient();
   const res = await sheets.spreadsheets.values.get({
@@ -286,15 +401,25 @@ async function leerTarifas() {
     range: 'Tarifas!B2:B15'
   });
   const values = res.data.values || [];
-  const [miami_general, miami_especial, , colombia_general, colombia_especial, , espana_general, espana_especial] = values.flat().map(v => parseFloat(v) || 0);
-  
   return {
-    miami_general_lb: miami_general,
-    miami_especial_lb: miami_especial,
-    colombia_general_kg: colombia_general,
-    colombia_especial_kg: colombia_especial,
-    espana_general_lb: espana_general,
-    espana_especial_lb: espana_especial
+    miami: {
+      sinPermiso: parseFloat(values[1]?.[0]) || 6.0,
+      conPermiso: parseFloat(values[2]?.[0]) || 7.0
+    },
+    colombia: {
+      sinPermiso: parseFloat(values[5]?.[0]) || 9.0,
+      conPermiso: parseFloat(values[6]?.[0]) || 16.0
+    },
+    espana: {
+      sinPermiso: parseFloat(values[9]?.[0]) || 8.5,
+      conPermiso: parseFloat(values[10]?.[0]) || 9.9
+    },
+    china: {
+      tarifa: parseFloat(values[12]?.[0]) || 10.0
+    },
+    mexico: {
+      tarifa: parseFloat(values[14]?.[0]) || 12.0
+    }
   };
 }
 
@@ -321,7 +446,7 @@ function generarPDF(id, fecha, c) {
     <h2>Cotización - J.I Asesoría & Courier</h2>
     <p><strong>ID:</strong> ${id}</p>
     <p><strong>Origen:</strong> ${c.origen}</p>
-    <p><strong>Destino:</strong> ${c.destino}</p>
+    <p><strong>Destino:</strong> Costa Rica</p>
     <p><strong>Tipo:</strong> ${c.tipoMercancia}</p>
     <p><strong>Peso facturable:</strong> ${c.pesoFacturable} ${c.unidadFacturable}</p>
     <p><strong>Total:</strong> $${c.total.toFixed(2)}</p>
@@ -333,7 +458,7 @@ async function enviarPDF(email, id, html) {
     service: 'gmail',
     auth: {
       user: ADMIN_EMAIL,
-      pass: ADMIN_PASSWORD
+      pass: ADMIN_EMAIL_PASSWORD
     }
   });
 
@@ -346,7 +471,6 @@ async function enviarPDF(email, id, html) {
   };
 
   await transporter.sendMail(mailOptions);
-  // También enviar copia al admin
   mailOptions.to = ADMIN_EMAIL;
   await transporter.sendMail(mailOptions);
 }
