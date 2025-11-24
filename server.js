@@ -99,11 +99,11 @@ function mainMenuKeyboard() {
 function categoriaInlineKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: 'Electrónicos', callback_ 'CATEGORIA|Electrónicos' }, { text: 'Ropa / Calzado', callback_ 'CATEGORIA|Ropa' }],
-      [{ text: 'Perfumería', callback_ 'CATEGORIA|Perfumería' }, { text: 'Medicinas / Suplementos', callback_ 'CATEGORIA|Medicinas' }],
-      [{ text: 'Alimentos', callback_ 'CATEGORIA|Alimentos' }, { text: 'Cosméticos', callback_ 'CATEGORIA|Cosméticos' }],
-      [{ text: 'Réplicas / Imitaciones', callback_ 'CATEGORIA|Réplicas' }, { text: 'Piezas automotrices', callback_ 'CATEGORIA|Automotriz' }],
-      [{ text: 'Documentos', callback_ 'CATEGORIA|Documentos' }, { text: 'Otro', callback_ 'CATEGORIA|Otro' }]
+      [{ text: 'Electrónicos', callback_data: 'CATEGORIA|Electrónicos' }, { text: 'Ropa / Calzado', callback_data: 'CATEGORIA|Ropa' }],
+      [{ text: 'Perfumería', callback_data:_ 'CATEGORIA|Perfumería' }, { text: 'Medicinas / Suplementos', callback_data:_ 'CATEGORIA|Medicinas' }],
+      [{ text: 'Alimentos', callback_data:_ 'CATEGORIA|Alimentos' }, { text: 'Cosméticos', callback_data:_ 'CATEGORIA|Cosméticos' }],
+      [{ text: 'Réplicas / Imitaciones', callback_data:_ 'CATEGORIA|Réplicas' }, { text: 'Piezas automotrices', callback_data:_ 'CATEGORIA|Automotriz' }],
+      [{ text: 'Documentos', callback_data:_ 'CATEGORIA|Documentos' }, { text: 'Otro', callback_data:_ 'CATEGORIA|Otro' }]
     ]
   };
 }
@@ -111,11 +111,11 @@ function categoriaInlineKeyboard() {
 function casilleroPaisesKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: '🇺🇸 Miami (EE.UU.)', callback_ 'CASILLERO|miami' }],
-      [{ text: '🇪🇸 Madrid (España)', callback_ 'CASILLERO|espana' }],
-      [{ text: '🇨🇴 Bogotá / Medellín (Colombia)', callback_ 'CASILLERO|colombia' }],
-      [{ text: '🇲🇽 Ciudad de México', callback_ 'CASILLERO|mexico' }],
-      [{ text: '🇨🇳 Shanghái / Guangzhou (China)', callback_ 'CASILLERO|china' }]
+      [{ text: '🇺🇸 Miami (EE.UU.)', callback_data:_ 'CASILLERO|miami' }],
+      [{ text: '🇪🇸 Madrid (España)', callback_data:_ 'CASILLERO|espana' }],
+      [{ text: '🇨🇴 Bogotá / Medellín (Colombia)', callback_data:_ 'CASILLERO|colombia' }],
+      [{ text: '🇲🇽 Ciudad de México', callback_data:_ 'CASILLERO|mexico' }],
+      [{ text: '🇨🇳 Shanghái / Guangzhou (China)', callback_data:_ 'CASILLERO|china' }]
     ]
   };
 }
@@ -123,8 +123,8 @@ function casilleroPaisesKeyboard() {
 function colombiaPermisoKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: '📦 Con permiso o réplicas', callback_ 'COL_CASILLERO|con' }],
-      [{ text: '📦 Sin permiso', callback_ 'COL_CASILLERO|sin' }]
+      [{ text: '📦 Con permiso o réplicas', callback_data:_ 'COL_CASILLERO|con' }],
+      [{ text: '📦 Sin permiso', callback_data:_ 'COL_CASILLERO|sin' }]
     ]
   };
 }
@@ -220,11 +220,11 @@ bot.onText(/\/banner/, async (msg) => {
   }
 });
 
-// === CALLBACKS ===
-bot.on('callback_query', async (query) => {
+// === callback_data:S ===
+bot.on('callback_data:_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
-  await bot.answerCallbackQuery(query.id);
+  await bot.answercallback_data:Query(query.id);
 
   if (data.startsWith('CATEGORIA|')) {
     const categoria = data.split('|')[1];
