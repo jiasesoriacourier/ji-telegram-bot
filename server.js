@@ -1,699 +1,321 @@
-// server.js - Bot Telegram + Google Sheets (actualizado: cotización rápida, email opcional sin PDF, registro, tracking paginado, saldo)
+// ==============================
+//  J.I ASESORÍA & COURIER - BOT TELEGRAM
+//  server.js COMPLETO
+// ==============================
 
-// === DEPENDENCIAS ===
-const express = require('express');
-const TelegramBot = require('node-telegram-bot-api');
-const { google } = require('googleapis');
-const nodemailer = require('nodemailer');
-
-// === CONFIGURACIÓN ===
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID || '10Y0tg1kh6UrVtEzSj_0JGsP7GmydRabM5imlEXTwjLM';
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'jiasesoriacourier@gmail.com';
-const ADMIN_EMAIL_PASSWORD = process.env.ADMIN_EMAIL_PASSWORD;
-
-if (!TELEGRAM_TOKEN) throw new Error('Falta TELEGRAM_TOKEN en variables de entorno');
-if (!process.env.GOOGLE_CREDENTIALS) throw new Error('Falta GOOGLE_CREDENTIALS en variables de entorno (JSON o Base64)');
-
+const express = require("express");
+const TelegramBot = require("node-telegram-bot-api");
+const { google } = require("googleapis");
 const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
-const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`;
-const userStates = new Map();
+// -----------------------------------------------------
+// CONFIGURACIÓN DE ENTORNO
+// -----------------------------------------------------
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const TELEGRAM_ADMIN = "7826072133";
 
-// --- listas de productos ---
-const MERCANCIA_ESPECIAL = ["colonias","perfume","perfumes","cremas","crema","cosmetico","cosmético","cosmeticos","cosméticos","maquillaje","medicamento","medicinas","suplemento","suplementos","vitamina","vitaminas","alimento","alimentos","semilla","semillas","agroquimico","agroquímico","fertilizante","lentes de contacto","quimico","químico","producto de limpieza","limpieza","bebida","bebidas","jarabe","tableta","capsula","cápsula"];
-const MERCANCIA_PROHIBIDA = ["licor","whisky","vodka","ron","alcohol","animal","vivo","piel","droga","drogas","cannabis","cbd","arma","armas","munición","municiones","explosivo","explosivos","pornograf","falsificado","falso","oro","plata","dinero","inflamable","corrosivo","radiactivo","gas","batería de litio","bateria de litio","tabaco","cigarro","cigarros"];
-const KNOWN_BRANDS = ["nike","adidas","puma","reebok","gucci","louis vuitton","lv","dior","chanel","tiffany","cartier","bulgari","bvlgari","rolex","pandora","piaget","graff","chopard","tous","david yurman","victoria's secret"];
+const GOOGLE_PROJECT_EMAIL = process.env.G_EMAIL;
+const GOOGLE_PRIVATE_KEY = process.env.G_PRIVATE_KEY.replace(/\\n/g, "\n");
+const SPREADSHEET_ID = "1SQ7HrIimD9QaWjM7CAbq5aWNhnwMREOfDnVgUSz4DV0";
 
-// --- utilidades de estado ---
-function setUserState(chatId, state) { userStates.set(chatId, state); }
-function getUserState(chatId) { return userStates.get(chatId); }
-function clearUserState(chatId) { userStates.delete(chatId); }
+// -----------------------------------------------------
+// INICIAR BOT
+// -----------------------------------------------------
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// --- Google Sheets client ---
-async function getGoogleSheetsClient() {
-  let credsRaw = process.env.GOOGLE_CREDENTIALS;
-  try {
-    if (!credsRaw.trim().startsWith('{')) credsRaw = Buffer.from(credsRaw, 'base64').toString('utf8');
-    const credentials = JSON.parse(credsRaw);
-    const auth = new google.auth.GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
-    const client = await auth.getClient();
-    return google.sheets({ version: 'v4', auth: client });
-  } catch (err) {
-    console.error('Error parseando GOOGLE_CREDENTIALS:', err);
-    throw err;
-  }
+// -----------------------------------------------------
+// GOOGLE AUTH
+// -----------------------------------------------------
+const auth = new google.auth.JWT(
+  GOOGLE_PROJECT_EMAIL,
+  null,
+  GOOGLE_PRIVATE_KEY,
+  ["https://www.googleapis.com/auth/spreadsheets"]
+);
+const sheets = google.sheets({ version: "v4", auth });
+
+// -----------------------------------------------------
+// FUNCIÓN: NORMALIZAR TELÉFONO
+// -----------------------------------------------------
+function normalizePhone(input) {
+  if (!input) return "";
+  let n = input.replace(/\D/g, "");
+  if (n.startsWith("506")) n = n.slice(3);
+  if (n.length > 8) n = n.slice(-8);
+  return n;
 }
 
-// --- helpers para rangos / extracción ---
-function extractRange(data, startRow, endRow, startCol, endCol) {
-  const lines = [];
-  for (let r = startRow; r <= endRow; r++) {
-    if (r >= data.length) continue;
-    const row = data[r] || [];
-    const cells = [];
-    for (let c = startCol; c <= endCol; c++) {
-      const cell = (row[c] || '').toString().trim();
-      if (cell) cells.push(cell);
-    }
-    if (cells.length > 0) lines.push(cells.join(' '));
-  }
-  return lines.join('\n');
-}
-
-// --- leer direcciones (rangos que proveíste) ---
-async function getDirecciones(nombreCliente = 'Nombre de cliente') {
-  const sheets = await getGoogleSheetsClient();
-  const sheetVals = sheets.spreadsheets.values;
-  const range = 'Direcciones!A:Z';
-  const res = await sheetVals.get({ spreadsheetId: SPREADSHEET_ID, range });
-  const data = res.data.values || [];
-  const replaceName = (text) => text.replace(/Nombre de cliente/gi, nombreCliente);
-  return {
-    miami: replaceName(extractRange(data, 1, 4, 1, 3)),
-    espana: replaceName(extractRange(data, 16, 20, 1, 3)),
-    colombiaCon: replaceName(extractRange(data, 0, 6, 6, 9)),
-    colombiaSin: replaceName(extractRange(data, 10, 16, 6, 9)),
-    mexico: replaceName(extractRange(data, 23, 28, 1, 3)),
-    china: replaceName(extractRange(data, 23, 28, 6, 9))
-  };
-}
-
-// --- teclados ---
-function mainMenuKeyboard() {
-  return {
-    keyboard: [
-      ['/mi_casillero', '/crear_casillero'],
-      ['/cotizar', '/consultar_tracking'],
-      ['/saldo', '/banner']
-    ],
-    resize_keyboard: true,
-    one_time_keyboard: false
-  };
-}
-function categoriaInlineKeyboard() {
-  return {
-    inline_keyboard: [
-      [{ text: 'Electrónicos', callback_data: 'CATEGORIA|Electrónicos' }, { text: 'Ropa / Calzado', callback_data: 'CATEGORIA|Ropa' }],
-      [{ text: 'Perfumería', callback_data: 'CATEGORIA|Perfumería' }, { text: 'Medicinas / Suplementos', callback_data: 'CATEGORIA|Medicinas' }],
-      [{ text: 'Alimentos', callback_data: 'CATEGORIA|Alimentos' }, { text: 'Cosméticos', callback_data: 'CATEGORIA|Cosméticos' }],
-      [{ text: 'Réplicas / Imitaciones', callback_data: 'CATEGORIA|Réplicas' }, { text: 'Piezas automotrices', callback_data: 'CATEGORIA|Automotriz' }],
-      [{ text: 'Documentos', callback_data: 'CATEGORIA|Documentos' }, { text: 'Otro', callback_data: 'CATEGORIA|Otro' }]
-    ]
-  };
-}
-function casilleroPaisesKeyboard() {
-  return {
-    inline_keyboard: [
-      [{ text: '🇺🇸 Miami', callback_data: 'CASILLERO|miami' }],
-      [{ text: '🇪🇸 Madrid', callback_data: 'CASILLERO|espana' }],
-      [{ text: '🇨🇴 Colombia', callback_data: 'CASILLERO|colombia' }],
-      [{ text: '🇲🇽 México', callback_data: 'CASILLERO|mexico' }],
-      [{ text: '🇨🇳 China', callback_data: 'CASILLERO|china' }]
-    ]
-  };
-}
-function colombiaPermisoKeyboard() {
-  return { inline_keyboard: [[{ text: '📦 Con permiso o réplicas', callback_data: 'COL_CASILLERO|con' }],[{ text: '📦 Sin permiso', callback_data: 'COL_CASILLERO|sin' }]] };
-}
-
-// --- clasificación de producto ---
-function classifyProduct(obj) {
-  const text = (obj.descripcion || '').toLowerCase();
-  const categoriaSeleccionada = (obj.categoriaSeleccionada || '').toLowerCase();
-  const origen = (obj.origen || '').toLowerCase();
-  for (const w of MERCANCIA_PROHIBIDA) if (text.includes(w)) return { tipo: 'Prohibida', tags: [w] };
-  if (categoriaSeleccionada.includes('réplica') || categoriaSeleccionada.includes('replica')) {
-    return origen === 'colombia' ? { tipo: 'Especial', tags: ['replica'] } : { tipo: 'General', tags: ['replica'] };
-  }
-  const foundSpecial = [];
-  for (const w of MERCANCIA_ESPECIAL) if (text.includes(w)) foundSpecial.push(w);
-  if (foundSpecial.length) return { tipo: 'Especial', tags: foundSpecial };
-  for (const b of KNOWN_BRANDS) if (text.includes(b)) {
-    return origen === 'colombia' ? { tipo: 'Especial', tags: ['brand:'+b] } : { tipo: 'General', tags: ['brand:'+b] };
-  }
-  return { tipo: 'General', tags: [] };
-}
-
-// --- rutas / webhook ---
-app.post(`/${TELEGRAM_TOKEN}`, (req, res) => { res.sendStatus(200); try { bot.processUpdate(req.body); } catch (err) { console.error('processUpdate error', err); } });
-app.get('/', (req, res) => res.send('✅ Bot activo - J.I Asesoría & Courier'));
-
-// --- util: normalizar teléfono (sencillo: solo dígitos, eliminamos prefijo 506 si lo incluye) ---
-function normalizePhone(p) {
-  if (!p) return '';
-  const s = p.toString();
-  // quitar todo lo que no sea dígito
-  let digits = s.replace(/\D/g, '');
-  // si incluye código país 506 al inicio, lo quitamos para normalizar a formato local
-  digits = digits.replace(/^506/, '');
-  // quitar ceros a la izquierda si existen (opcional)
-  digits = digits.replace(/^0+/, '');
-  return digits;
-}
-
-// --- BUSCAR CLIENTE POR TELEFONO en hoja "Clientes"
-// Ahora: Contacto = columna D (index 3), Saldo pendiente = columna H (index 7)
-async function findClientByPhone(phone) {
-  const normalized = normalizePhone(phone);
-  const sheets = await getGoogleSheetsClient();
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Clientes!A:H' });
-  const rows = res.data.values || [];
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const contactRaw = row[3] || ''; // columna D
-    const contact = normalizePhone(contactRaw);
-    // comparación flexible: exacto o sufijo (por si guardaron con prefijo)
-    if (contact && (contact === normalized || contact.endsWith(normalized) || normalized.endsWith(contact))) {
-      return {
-        rowIndex: i+1,
-        raw: row,
-        nombre: row[0] || '',
-        correo: row[1] || '',
-        contacto: row[3] || '',
-        direccion: row[6] || '',
-        saldo: parseFloat((row[7] || '0').toString().replace(/[^0-9.\-]/g, '')) || 0
-      };
-    }
-  }
-  return null;
-}
-
-// --- AÑADIR CLIENTE en Clientes (A: Nombre, B: Correo, D: Contacto, G: Direccion, H: saldo)
-async function addClientToSheet({ nombre, correo, contacto, direccion }) {
-  const sheets = await getGoogleSheetsClient();
-  // Preparar fila A..H
-  const values = [[ nombre || '', correo || '', '', contacto || '', '', '', direccion || '', 0 ]];
-  await sheets.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_ID, range: 'Clientes!A:H', valueInputOption: 'RAW', resource: { values } });
-}
-
-// --- OBTENER TRACKINGS POR NOMBRE desde Datos (A: tracking, B: nombre, C: comentarios, D: origen, E: estado, F: peso) ---
-async function getTrackingsByName(nombre) {
-  const sheets = await getGoogleSheetsClient();
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Datos!A:F' });
-  const rows = res.data.values || [];
-  const items = [];
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const name = (r[1]||'').toString().trim().toLowerCase();
-    if (!name) continue;
-    if (name === nombre.toLowerCase()) {
-      items.push({
-        rowIndex: i+1,
-        tracking: r[0] || '',
-        comentarios: r[2] || '',
-        origen: r[3] || '',
-        estado: r[4] || '',
-        peso: r[5] || ''
-      });
-    }
-  }
-  return items;
-}
-
-// --- PAGINACIÓN: enviar listado de trackings (5 por página) ---
-const TRACKS_PER_PAGE = 5;
-async function sendTrackingList(chatId, items, page = 1) {
-  if (!items || items.length === 0) return bot.sendMessage(chatId, 'No se encontraron paquetes para tu casillero.');
-  const totalPages = Math.ceil(items.length / TRACKS_PER_PAGE);
-  page = Math.max(1, Math.min(page, totalPages));
-  const start = (page - 1) * TRACKS_PER_PAGE;
-  const slice = items.slice(start, start + TRACKS_PER_PAGE);
-
-  const lines = slice.map((it, idx) => {
-    const localIndex = start + idx + 1;
-    return `${localIndex}. ${it.tracking || '(sin tracking)'} — ${it.origen || '-'} — ${it.estado || '-'} — ${it.peso || '-'}`;
-  }).join('\n');
-
-  // inline buttons: detail per item + prev/next
-  const inline = slice.map((it, idx) => [{ text: `Ver ${start+idx+1}`, callback_data: `TRACK_DETAIL|${start+idx}` }]);
-  // paging buttons
-  const paging = [];
-  if (page > 1) paging.push({ text: '◀️ Anterior', callback_data: `TRACK_PAGE|${page-1}` });
-  if (page < totalPages) paging.push({ text: 'Siguiente ▶️', callback_data: `TRACK_PAGE|${page+1}` });
-  // inline keyboard
-  const inline_keyboard = inline.concat([paging]);
-
-  await bot.sendMessage(chatId, `📦 Paquetes (${items.length}) — Página ${page}/${totalPages}\n\n${lines}`, {
-    reply_markup: { inline_keyboard }
+// -----------------------------------------------------
+// FUNCIÓN: LEER HOJA
+// -----------------------------------------------------
+async function readRange(range) {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range,
   });
-
-  // store last listing in memory so callback can look up by index
-  setUserState(chatId, { modo: 'TRACKING_LIST', itemsCache: items, page });
+  return res.data.values || [];
 }
 
-// --- MANEJO COMANDOS / MENÚS ---
-bot.onText(/\/start|\/ayuda|\/help/, (msg) => {
+// -----------------------------------------------------
+// FUNCIÓN: ESCRIBIR EN HOJA
+// -----------------------------------------------------
+async function appendRow(range, row) {
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_ID,
+    range,
+    valueInputOption: "USER_ENTERED",
+    resource: { values: [row] },
+  });
+}
+
+// -----------------------------------------------------
+// MENÚ PRINCIPAL
+// -----------------------------------------------------
+function mainMenu(chatId) {
+  bot.sendMessage(chatId, "📦 *Bienvenido a J.I Asesoría & Courier*", {
+    parse_mode: "Markdown",
+    reply_markup: {
+      keyboard: [
+        ["📮 Mi Casillero"],
+        ["💵 Cotizar envío"],
+        ["🚚 Consultar Tracking"],
+        ["💰 Consultar saldo pendiente"],
+        ["👤 Contactar a JICO Courier"],
+      ],
+      resize_keyboard: true,
+    },
+  });
+}
+
+// -----------------------------------------------------
+// VERIFICAR REGISTRO
+// -----------------------------------------------------
+async function getClient(phone) {
+  const rows = await readRange("Clientes!A2:H");
+  return rows.find((r) => normalizePhone(r[3]) === phone) || null;
+}
+
+// -----------------------------------------------------
+// MANEJO DE MENSAJES
+// -----------------------------------------------------
+bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
-  const name = (msg.from && msg.from.first_name) ? msg.from.first_name : 'Cliente';
-  bot.sendMessage(chatId, `Hola ${name} 👋\nUsa /menu para ver las opciones.`, { reply_markup: mainMenuKeyboard() });
-});
-bot.onText(/\/menu/, (msg) => bot.sendMessage(msg.chat.id, 'Menú principal:', { reply_markup: mainMenuKeyboard() }));
+  const text = msg.text?.trim() || "";
+  const phone = normalizePhone(msg.from.phone_number || msg.contact?.phone_number || "");
 
-// --- CREAR CASILLERO: iniciar flujo ---
-bot.onText(/\/crear_casillero/, async (msg) => {
-  const chatId = msg.chat.id;
-  setUserState(chatId, { modo: 'CREAR_NOMBRE' });
-  bot.sendMessage(chatId, 'Vamos a crear tu casillero. Primero, escribe tu *Nombre completo* (mínimo 1 nombre + 2 apellidos).', { parse_mode: 'Markdown' });
-});
+  // ================
+  // MENÚ PRINCIPAL
+  // ================
+  if (text === "/start") return mainMenu(chatId);
 
-// --- MI CASILLERO: exige registro previo (verifica por teléfono) ---
-bot.onText(/\/mi_casillero/, async (msg) => {
-  const chatId = msg.chat.id;
-  const state = getUserState(chatId) || {};
-  state.modo = 'CHECK_CASILLERO_PHONE';
-  setUserState(chatId, state);
-  bot.sendMessage(chatId, 'Para verificar tu casillero, por favor escribe el *número de teléfono* con el que te registraste (ej: 88885555 o +50688885555).', { parse_mode: 'Markdown' });
-});
-
-// --- CONSULTAR TRACKING comando ---
-bot.onText(/\/consultar_tracking/, async (msg) => {
-  const chatId = msg.chat.id;
-  setUserState(chatId, { modo: null }); // reset
-  bot.sendMessage(chatId, 'Para consultar tus paquetes, escribe el número de teléfono con el que te registraste (ej: 88885555 o +50688885555).');
-});
-
-// --- SALDO pendiente comando (/saldo) ---
-bot.onText(/\/saldo/, async (msg) => {
-  const chatId = msg.chat.id;
-  bot.sendMessage(chatId, 'Por favor escribe el número de teléfono con el que te registraste para verificar tu saldo pendiente.');
-  setUserState(chatId, { modo: 'CHECK_SALDO_PHONE' });
-});
-
-// --- COTIZAR: iniciar flujo (no pide destino) ---
-bot.onText(/\/cotizar/, (msg) => {
-  const chatId = msg.chat.id;
-  setUserState(chatId, { modo: 'COTIZAR_ORIGEN' });
-  bot.sendMessage(chatId, 'Comenzamos la cotización. ¿Cuál es el ORIGEN? (miami, madrid, colombia, mexico, china)');
-});
-
-// banner
-bot.onText(/\/banner/, async (msg) => {
-  try { await bot.sendPhoto(msg.chat.id, 'https://i.imgur.com/qJnTEVD.jpg'); } catch { bot.sendMessage(msg.chat.id, 'No pudimos enviar el banner.'); }
-});
-
-// --- CALLBACKS (categoría, casillero, colombia permiso, tracking pagination/detail, ver detalle, enviar email) ---
-bot.on('callback_query', async (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data || '';
-  await bot.answerCallbackQuery(query.id).catch(()=>{});
-  try {
-    if (data.startsWith('CATEGORIA|')) {
-      const categoria = data.split('|')[1] || '';
-      const state = getUserState(chatId) || {};
-      state.categoriaSeleccionada = categoria;
-      state.modo = 'COTIZAR_DESCRIPCION';
-      setUserState(chatId, state);
-      bot.sendMessage(chatId, `Has seleccionado *${categoria}*. Ahora describe el producto.`, { parse_mode: 'Markdown' });
-    }
-    else if (data.startsWith('CASILLERO|')) {
-      const pais = data.split('|')[1];
-      if (pais === 'colombia') {
-        bot.sendMessage(chatId, '¿Tu mercancía requiere permiso de importación?', { reply_markup: colombiaPermisoKeyboard() });
-      } else {
-        const nombre = (query.from && query.from.first_name) ? query.from.first_name : 'Cliente';
-        const dire = await getDirecciones(nombre);
-        let direccion = 'No disponible';
-        if (pais === 'miami') direccion = dire.miami;
-        else if (pais === 'espana') direccion = dire.espana;
-        else if (pais === 'mexico') direccion = dire.mexico;
-        else if (pais === 'china') direccion = dire.china;
-        const nombres = { miami:'Miami', espana:'Madrid', mexico:'Ciudad de México', china:'China' };
-        bot.sendMessage(chatId, `📍 *Dirección en ${nombres[pais]}*:\n\n${direccion}`, { parse_mode: 'Markdown' });
-      }
-    }
-    else if (data.startsWith('COL_CASILLERO|')) {
-      const tipo = data.split('|')[1];
-      const nombre = (query.from && query.from.first_name) ? query.from.first_name : 'Cliente';
-      const dire = await getDirecciones(nombre);
-      const direccion = tipo === 'con' ? dire.colombiaCon : dire.colombiaSin;
-      bot.sendMessage(chatId, `📍 *Dirección en Colombia (${tipo==='con'?'Con permiso':'Sin permiso'})*:\n\n${direccion}`, { parse_mode: 'Markdown' });
-    }
-    else if (data.startsWith('TRACK_PAGE|')) {
-      const page = parseInt(data.split('|')[1]||'1',10);
-      const st = getUserState(chatId) || {};
-      const items = st.itemsCache || [];
-      await sendTrackingList(chatId, items, page);
-    }
-    else if (data.startsWith('TRACK_DETAIL|')) {
-      const idx = parseInt(data.split('|')[1]||'0',10);
-      const st = getUserState(chatId) || {};
-      const items = st.itemsCache || [];
-      const item = items[idx];
-      if (!item) return bot.sendMessage(chatId, 'Elemento no encontrado o expiró la lista. Vuelve a consultar.');
-      const text = `📦 *Tracking:* ${item.tracking}\n*Origen:* ${item.origen}\n*Estado:* ${item.estado}\n*Peso:* ${item.peso}\n*Comentarios:* ${item.comentarios || '-'}`;
-      bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
-    }
-    else if (data.startsWith('VER_DETALLE|')) {
-      const id = data.split('|')[1];
-      const st = getUserState(chatId) || {};
-      const pending = st.pendingCotizacion;
-      if (!pending || pending.id !== id) return bot.sendMessage(chatId, 'Detalle no encontrado o expiró. Vuelve a cotizar.');
-      const d = pending;
-      const detalle = `🧾 Detalle cotización:\nID: ${d.id}\nFecha: ${d.fecha}\nOrigen: ${d.origen}\nTipo: ${d.tipoMercancia}\nDescripción: ${d.descripcion || '-'}\nPeso declarado: ${d.peso} ${d.unidad}\nPeso facturable: ${d.pesoFacturable} ${d.unidadFacturable}\nTarifa: $${d.tarifa}\nSubtotal: $${d.subtotal.toFixed(2)}\nDescuento: $${(d.subtotal - d.total).toFixed(2)} (${(d.discountPercent*100).toFixed(1)}%)\nTotal: $${d.total.toFixed(2)}`;
-      return bot.sendMessage(chatId, detalle);
-    }
-    else if (data.startsWith('ENVIAR_EMAIL|')) {
-      const id = data.split('|')[1];
-      const st = getUserState(chatId) || {};
-      const pending = st.pendingCotizacion;
-      if (!pending || pending.id !== id) return bot.sendMessage(chatId, 'Cotización no encontrada o expiró. Vuelve a cotizar.');
-      // start sending email (and show progress message if slow)
-      sendCotizacionByEmailFlow(chatId, pending);
-    }
-    else if (data.startsWith('NO_ENVIAR|')) {
-      clearUserState(chatId);
-      return bot.sendMessage(chatId, 'Entendido. Si necesitas otra cotización, usa /cotizar.');
-    }
-
-  } catch (err) {
-    console.error('Error callback_query:', err);
-    bot.sendMessage(chatId, 'Ocurrió un error procesando la opción. Intenta nuevamente.');
+  // ================
+  // CONTACTAR AGENTE
+  // ================
+  if (text === "👤 Contactar a JICO Courier") {
+    return bot.sendMessage(chatId,
+      "¿Por dónde deseas contactar a JICO Courier?\n\n" +
+      "📩 *Correo:* info@jiasesoria.com\n" +
+      "📱 *WhatsApp:* https://wa.me/50663939073\n" +
+      "🤖 *Telegram:* https://t.me/JICOcourierbot",
+      { parse_mode: "Markdown" }
+    );
   }
-});
 
-// --- mensaje libre flow: manejar crear casillero, cotizar y consultas ---
-bot.on('message', async (msg) => {
-  try {
-    if (!msg.text || msg.text.startsWith('/')) return;
-    const chatId = msg.chat.id;
-    const text = msg.text.trim();
-    const state = getUserState(chatId) || {};
-
-    // ------------- CREAR CASILLERO FLOW -------------
-    if (state.modo === 'CREAR_NOMBRE') {
-      const words = text.split(/\s+/).filter(Boolean);
-      if (words.length < 3) return bot.sendMessage(chatId, 'Por favor ingresa *Nombre completo* con al menos 1 nombre y 2 apellidos.', { parse_mode: 'Markdown' });
-      state.nombre = text;
-      state.modo = 'CREAR_EMAIL';
-      setUserState(chatId, state);
-      return bot.sendMessage(chatId, 'Ahora ingresa tu *correo electrónico* para contacto.', { parse_mode: 'Markdown' });
-    }
-    if (state.modo === 'CREAR_EMAIL') {
-      if (!text.includes('@')) return bot.sendMessage(chatId, 'Correo inválido. Ingresa nuevamente.');
-      state.correo = text;
-      state.modo = 'CREAR_TELEFONO';
-      setUserState(chatId, state);
-      return bot.sendMessage(chatId, 'Ingresa ahora tu *número de contacto* (ej: 88885555 o +50688885555).', { parse_mode: 'Markdown' });
-    }
-    if (state.modo === 'CREAR_TELEFONO') {
-      const phone = normalizePhone(text);
-      if (!phone || phone.length < 7) return bot.sendMessage(chatId, 'Número inválido. Intenta con solo dígitos (ej: 88885555) o con +506 prefijo.');
-      // check existing
-      const existing = await findClientByPhone(phone);
-      if (existing) return bot.sendMessage(chatId, `Ya existe un registro con ese número bajo el nombre: *${existing.nombre}*. Si es tuyo, usa /mi_casillero.`, { parse_mode: 'Markdown' });
-      state.telefono = phone;
-      state.modo = 'CREAR_DIRECCION';
-      setUserState(chatId, state);
-      return bot.sendMessage(chatId, 'Por último, indica tu *dirección de entrega* (calle, número, ciudad).', { parse_mode: 'Markdown' });
-    }
-    if (state.modo === 'CREAR_DIRECCION') {
-      state.direccion = text;
-      // save to sheet
-      await addClientToSheet({ nombre: state.nombre, correo: state.correo, contacto: state.telefono, direccion: state.direccion });
-      clearUserState(chatId);
-      return bot.sendMessage(chatId, `✅ Registro completado. Hemos creado tu casillero para *${state.nombre}*.`, { parse_mode: 'Markdown' });
+  // =========================================================
+  // MI CASILLERO
+  // =========================================================
+  if (text === "📮 Mi Casillero") {
+    const cliente = await getClient(phone);
+    if (!cliente) {
+      return bot.sendMessage(
+        chatId,
+        "❌ No encontramos tu casillero.\nPor favor escribe */registrar* para crear tu cuenta.",
+        { parse_mode: "Markdown" }
+      );
     }
 
-    // ------------- CHECK CASILLERO (cuando piden teléfono para ver casillero) -------------
-    if (state.modo === 'CHECK_CASILLERO_PHONE') {
-      const phone = normalizePhone(text);
-      const client = await findClientByPhone(phone);
-      if (!client) {
-        clearUserState(chatId);
-        return bot.sendMessage(chatId, 'No encontramos un registro con ese número. Usa /crear_casillero para registrarte.');
-      }
-      // fetch trackings
-      const items = await getTrackingsByName(client.nombre);
-      if (!items || items.length === 0) return bot.sendMessage(chatId, 'No encontramos paquetes asociados a tu casillero.');
-      await sendTrackingList(chatId, items, 1);
-      return;
+    const casillero = cliente[1];
+    return bot.sendMessage(
+      chatId,
+      `📦 *Tu casillero JICO*\n\nNombre: ${cliente[0]}\nCasillero: ${casillero}\n\nDirección Miami:\n2874 NW 72 AVE\nJICO COURIER\nMiami, FL 33122\nTel: +1(786)820-8844`,
+      { parse_mode: "Markdown" }
+    );
+  }
+
+  // =========================================================
+  // CONSULTAR TRACKING
+  // =========================================================
+  if (text === "🚚 Consultar Tracking") {
+    const cliente = await getClient(phone);
+    if (!cliente) {
+      return bot.sendMessage(
+        chatId,
+        "❌ No estás registrado. Escribe */registrar* para continuar.",
+        { parse_mode: "Markdown" }
+      );
     }
 
-    // ------------- CHECK SALDO -------------
-    if (state.modo === 'CHECK_SALDO_PHONE') {
-      const phone = normalizePhone(text);
-      const client = await findClientByPhone(phone);
-      clearUserState(chatId);
-      if (!client) return bot.sendMessage(chatId, 'No encontramos un registro con ese número. Usa /crear_casillero para registrarte.');
-      return bot.sendMessage(chatId, `💳 Saldo pendiente: $${(client.saldo || 0).toFixed(2)}`);
+    const nombre = cliente[0];
+    const trackingRows = await readRange("Tracking1!A2:G");
+
+    const userTrackings = trackingRows.filter((row) =>
+      (row[2] || "").toLowerCase() === nombre.toLowerCase()
+    );
+
+    if (userTrackings.length === 0)
+      return bot.sendMessage(chatId, "No tienes paquetes registrados.");
+
+    let txt = "📦 *Tus paquetes:*\n\n";
+    userTrackings.forEach((p) => {
+      txt += `🔹 Tracking: *${p[0]}*\nEstado: ${p[5]}\nPeso: ${p[4]}\n\n`;
+    });
+
+    return bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
+  }
+
+  // =========================================================
+  // CONSULTAR SALDO
+  // =========================================================
+  if (text === "💰 Consultar saldo pendiente") {
+    const cliente = await getClient(phone);
+    if (!cliente) {
+      return bot.sendMessage(chatId, "Primero debes registrarte con /registrar");
     }
 
-    // ------------- COTIZAR FLOW -------------
-    if (state.modo === 'COTIZAR_ORIGEN') {
-      state.origen = text.toLowerCase();
-      state.modo = 'COTIZAR_CATEGORIA';
-      setUserState(chatId, state);
-      return bot.sendMessage(chatId, 'Selecciona la categoría de tu mercancía:', { reply_markup: categoriaInlineKeyboard() });
-    }
-    if (state.modo === 'COTIZAR_DESCRIPCION') {
-      state.descripcion = text;
-      const classification = classifyProduct({ descripcion: state.descripcion, categoriaSeleccionada: state.categoriaSeleccionada, origen: state.origen });
-      if (classification.tipo === 'Prohibida') { clearUserState(chatId); return bot.sendMessage(chatId, '⚠️ Mercancía prohibida. No podemos aceptarla.'); }
-      state.tipoMercancia = classification.tipo;
-      state.modo = 'COTIZAR_PESO';
-      setUserState(chatId, state);
-      return bot.sendMessage(chatId, 'Indica el PESO (ej: 2.3 kg, 4 lb, 3 libras, 5 kilos).');
-    }
-    if (state.modo === 'COTIZAR_PESO') {
-      // aceptar kilos / kilos / kg / libras / lb / lbs
-      const pesoMatch = text.match(/([\d.]+)\s*(kg|kgs|kilos|kilo|kilogramos|lb|lbs|libras|libra)/i);
-      if (!pesoMatch) return bot.sendMessage(chatId, 'No entendí el peso. Usa: 2.5 kg, 3 kilos, 3 lb o 4 libras');
-      const rawUnit = pesoMatch[2].toLowerCase();
-      const unit = /kg|kilo|kilos|kgs|kilogramos/.test(rawUnit) ? 'kg' : 'lb';
-      state.peso = parseFloat(pesoMatch[1]);
-      state.unidad = unit;
-      state.modo = 'COTIZAR_EMAIL';
-      setUserState(chatId, state);
-      return bot.sendMessage(chatId, `Resumen:\nOrigen: ${state.origen}\nTipo: ${state.tipoMercancia}\nDescripción: ${state.descripcion}\nPeso: ${state.peso} ${state.unidad}\n\nIndica tu correo para recibir la cotización (o escribe "no" si no quieres correo).`);
-    }
-    if (state.modo === 'COTIZAR_EMAIL') {
-      if (text.toLowerCase() === 'no') {
-        // no email; procedemos a calcular, mostrar y permitir ver detalle sin pedir correo
-        const cot = await calcularYRegistrarCotizacion(chatId, state);
-        // mostrar cotización inmediata
-        const summary = `✅ Cotización:\nID: ${cot.id}\nSubtotal: $${cot.subtotal.toFixed(2)}\nDescuento: ${(cot.discountPercent*100).toFixed(1)}%\nTotal: $${cot.total.toFixed(2)}`;
-        // store pending in user state
-        const pending = { ...state, ...cot, fecha: new Date().toISOString() };
-        setUserState(chatId, { modo: null, pendingCotizacion: pending });
-        await bot.sendMessage(chatId, summary);
-        // buttons: ver detalle / no enviar
-        return bot.sendMessage(chatId, '¿Deseas ver el detalle o enviar esta cotización por correo?', {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: 'Ver detalle', callback_data: `VER_DETALLE|${pending.id}` }],
-              [{ text: 'Enviar por correo', callback_data: `ENVIAR_EMAIL|${pending.id}` }, { text: 'No, gracias', callback_data: `NO_ENVIAR|${pending.id}` }]
-            ]
-          }
+    const saldo = cliente[7] || 0;
+    return bot.sendMessage(chatId, `💵 *Tu saldo pendiente es:* ₡${saldo}`, {
+      parse_mode: "Markdown",
+    });
+  }
+
+  // =========================================================
+  // COTIZAR ENVÍO
+  // =========================================================
+  if (text === "💵 Cotizar envío") {
+    bot.sendMessage(chatId, "📍 *Elige origen de tu envío:*", {
+      parse_mode: "Markdown",
+      reply_markup: {
+        keyboard: [["Miami", "España"], ["Colombia", "México"], ["China"]],
+        resize_keyboard: true,
+        one_time_keyboard: true,
+      },
+    });
+
+    bot.once("message", async (m1) => {
+      const origen = m1.text;
+
+      bot.sendMessage(chatId, "📦 Ingresa el peso:");
+      bot.once("message", async (m2) => {
+        let peso = parseFloat(m2.text.replace(",", "."));
+        if (isNaN(peso)) return bot.sendMessage(chatId, "Peso inválido.");
+
+        bot.sendMessage(chatId, "¿El paquete requiere permiso especial? (sí/no)");
+        bot.once("message", async (m3) => {
+          const permiso = m3.text.toLowerCase() === "si" ? "especial" : "normal";
+
+          bot.sendMessage(chatId, "¿La entrega sería dentro del GAM? (sí/no)");
+          bot.once("message", async (m4) => {
+            const esGAM = m4.text.toLowerCase() === "si";
+
+            // ============================
+            // CARGAR TARIFAS
+            // ============================
+            const tarifas = await readRange("Tarifas!A1:K20");
+            const tipoCambio = parseFloat(tarifas[2][9]); // J3
+            const costoEntrega = parseFloat(tarifas[0][9]); // J1
+
+            let tarifa = 0;
+            let unidad = "lb";
+
+            switch (origen) {
+              case "Miami":
+                tarifa = permiso === "especial" ? tarifas[2][1] : tarifas[1][1];
+                unidad = "lb";
+                break;
+              case "España":
+                tarifa = permiso === "especial" ? tarifas[10][1] : tarifas[9][1];
+                unidad = "lb";
+                break;
+              case "Colombia":
+                tarifa = permiso === "especial" ? tarifas[6][1] : tarifas[5][1];
+                unidad = "kg";
+                break;
+              case "China":
+                tarifa = tarifas[12][1];
+                unidad = "lb";
+                break;
+              case "México":
+                tarifa = tarifas[14][1];
+                unidad = "kg";
+                break;
+            }
+
+            tarifa = parseFloat(tarifa);
+
+            // Conversión de peso
+            let pesoConv = peso;
+            if (unidad === "lb") pesoConv = peso / 2.20462;
+
+            const subtotalUSD = tarifa * (unidad === "lb" ? peso : pesoConv);
+            const subtotalCRC = subtotalUSD * tipoCambio;
+
+            const costoTotalEntrega = esGAM ? costoEntrega : 0;
+            const totalFinal = subtotalCRC + costoTotalEntrega;
+
+            // ============================
+            // RESPUESTA AL CLIENTE
+            // ============================
+            let texto =
+              "📦 *COTIZACIÓN COMPLETA*\n\n" +
+              `🌍 Origen: *${origen}*\n` +
+              `⚖ Peso: *${peso}*\n` +
+              `Permiso: *${permiso}*\n\n` +
+              `💵 Subtotal: ₡${subtotalCRC.toFixed(2)}\n` +
+              `🚚 Entrega: ${esGAM ? "₡" + costoEntrega : "Fuera del GAM (Encomienda)"}\n\n` +
+              `💰 *Total Final: ₡${totalFinal.toFixed(2)}*\n` +
+              `💱 Tipo de cambio usado: ${tipoCambio}\n\n` +
+              `*Esta tarifa puede variar según el tipo de cambio.*`;
+
+            bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
+
+            // ============================
+            // GUARDAR EN GOOGLE SHEETS
+            // ============================
+            const cliente = await getClient(phone);
+            const fecha = new Date();
+
+            await appendRow("Cotizaciones!A2:M", [
+              fecha.toLocaleString("es-CR"),
+              cliente ? cliente[0] : "No registrado",
+              origen,
+              peso,
+              unidad,
+              permiso,
+              "Mercancía enviada",
+              subtotalCRC.toFixed(2),
+              0,
+              subtotalCRC.toFixed(2),
+              costoTotalEntrega,
+              totalFinal.toFixed(2),
+              tipoCambio,
+            ]);
+
+            // ============================
+            // REENVIAR AL TELEGRAM ADMIN
+            // ============================
+            bot.sendMessage(
+              TELEGRAM_ADMIN,
+              `📨 NUEVA COTIZACIÓN\n\n${texto}\n\n📱 Cliente: ${cliente ? cliente[0] : "No registrado"}`
+            );
+          });
         });
-      }
-
-      if (!text.includes('@')) return bot.sendMessage(chatId, 'Correo inválido. Ingresa un correo válido o escribe "no" si no quieres recibir correo.');
-      state.email = text;
-      // calcular y guardar primero (rápido)
-      const cot = await calcularYRegistrarCotizacion(chatId, state);
-      const summary = `✅ Cotización:\nID: ${cot.id}\nSubtotal: $${cot.subtotal.toFixed(2)}\nDescuento: ${(cot.discountPercent*100).toFixed(1)}%\nTotal: $${cot.total.toFixed(2)}`;
-      // store pending data for callbacks
-      const pending = { ...state, ...cot, fecha: new Date().toISOString() };
-      setUserState(chatId, { modo: null, pendingCotizacion: pending });
-      await bot.sendMessage(chatId, summary);
-
-      // botones: ver detalle / enviar correo / no gracias
-      return bot.sendMessage(chatId, '¿Deseas ver el detalle aquí o enviar la cotización por correo?', {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: 'Ver detalle', callback_data: `VER_DETALLE|${pending.id}` }],
-            [{ text: 'Enviar por correo', callback_data: `ENVIAR_EMAIL|${pending.id}` }, { text: 'No, gracias', callback_data: `NO_ENVIAR|${pending.id}` }]
-          ]
-        }
       });
-    }
-
-  } catch (err) {
-    console.error('Error en message handler:', err);
-    // evitar congelar al usuario si hay error
-    try { bot.sendMessage(msg.chat.id, 'Ocurrió un error interno. Intenta nuevamente.'); } catch {}
+    });
   }
 });
 
-// --- CÁLCULOS Y REGISTRO (incluye descuento por tramos) ---
-function getDiscountPercentByPeso(peso) {
-  // peso: number (en la unidad facturable ya convertida)
-  if (peso >= 75) return 0.15;
-  if (peso >= 50) return 0.12;
-  if (peso >= 35) return 0.10;
-  if (peso >= 25) return 0.07;
-  if (peso >= 15) return 0.05;
-  return 0.00;
-}
-
-async function calcularYRegistrarCotizacion(chatId, state) {
-  const tarifas = await leerTarifas();
-  const { origen, peso, unidad, tipoMercancia, email } = state;
-  let tarifa = 0;
-  let pesoFacturable = 0;
-  let unidadFacturable = 'lb';
-  let subtotal = 0;
-
-  const pesoEnLb = unidad === 'kg' ? peso * 2.20462 : peso;
-  const pesoEnKg = unidad === 'lb' ? peso / 2.20462 : peso;
-  const origenLower = origen.toLowerCase();
-
-  if (origenLower === 'colombia') {
-    tarifa = (tipoMercancia === 'Especial' || tipoMercancia==='Replica') ? tarifas.colombia.conPermiso : tarifas.colombia.sinPermiso;
-    pesoFacturable = Math.ceil(pesoEnKg);
-    unidadFacturable = 'kg';
-    subtotal = tarifa * pesoFacturable;
-  } else if (origenLower === 'mexico') {
-    tarifa = tarifas.mexico.tarifa;
-    pesoFacturable = Math.ceil(pesoEnKg);
-    unidadFacturable = 'kg';
-    subtotal = tarifa * pesoFacturable;
-  } else if (origenLower === 'china') {
-    tarifa = tarifas.china.tarifa;
-    pesoFacturable = Math.ceil(pesoEnLb);
-    unidadFacturable = 'lb';
-    subtotal = tarifa * pesoFacturable;
-  } else if (origenLower === 'miami' || origenLower === 'usa') {
-    tarifa = (tipoMercancia === 'Especial') ? tarifas.miami.conPermiso : tarifas.miami.sinPermiso;
-    pesoFacturable = Math.ceil(pesoEnLb);
-    unidadFacturable = 'lb';
-    subtotal = tarifa * pesoFacturable;
-  } else if (origenLower === 'espana' || origenLower === 'madrid') {
-    tarifa = (tipoMercancia === 'Especial') ? tarifas.espana.conPermiso : tarifas.espana.sinPermiso;
-    pesoFacturable = Math.ceil(pesoEnLb);
-    unidadFacturable = 'lb';
-    subtotal = tarifa * pesoFacturable;
-  } else {
-    throw new Error('Origen no soportado');
-  }
-
-  // descuento según peso facturable (usar la unidadFacturable relevante)
-  const discountPercent = getDiscountPercentByPeso(pesoFacturable);
-  const discountAmount = subtotal * discountPercent;
-  const total = Math.round((subtotal - discountAmount) * 100) / 100;
-
-  const id = 'COT-' + Math.random().toString(36).substr(2,9).toUpperCase();
-  const fecha = new Date().toISOString();
-
-  // guardar en historial (añadimos campos de descuento)
-  await guardarEnHistorial({
-    id, fecha, chatId, email, origen, destino: 'Costa Rica', tipoMercancia, peso, unidad,
-    pesoFacturable, tarifa, subtotal, discountPercent, discountAmount, total
-  });
-
-  return { id, subtotal, discountPercent, total, pesoFacturable, unidadFacturable, tarifa };
-}
-
-// --- leerTarifas (rango B2:B15) ---
-async function leerTarifas() {
-  const sheets = await getGoogleSheetsClient();
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Tarifas!B2:B15' });
-  const values = (res.data.values || []).map(r => r[0]);
-  const val = idx => parseFloat(values[idx]) || 0;
-  return {
-    miami: { sinPermiso: val(0) || 6.0, conPermiso: val(1) || 7.0 },
-    colombia: { sinPermiso: val(4) || 9.0, conPermiso: val(5) || 16.0 },
-    espana: { sinPermiso: val(8) || 8.5, conPermiso: val(9) || 9.9 },
-    china: { tarifa: val(11) || 10.0 },
-    mexico: { tarifa: val(13) || 12.0 }
-  };
-}
-
-// --- guardarEnHistorial ---
-async function guardarEnHistorial(data) {
-  const sheets = await getGoogleSheetsClient();
-  const now = new Date().toISOString();
-  const values = [[
-    data.id, data.fecha || now, data.chatId, 'Cliente', data.email, data.origen, data.destino,
-    data.tipoMercancia, data.peso, data.unidad, data.pesoFacturable, data.tarifa,
-    data.subtotal, data.discountAmount || 0, data.total, JSON.stringify(data)
-  ]];
-  await sheets.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_ID, range: 'Historial!A:Z', valueInputOption: 'RAW', resource: { values } });
-}
-
-// --- ENVIAR CORREO (solo texto, sin PDF). Envía copia al admin también. 
-// Implementamos lógica para enviar notificación de "enviando" si tarda > 3s.
-async function sendPlainEmailWithProgress(chatId, toEmail, subject, body) {
-  if (!ADMIN_EMAIL_PASSWORD) {
-    console.warn('ADMIN_EMAIL_PASSWORD no definido. No se enviará correo.');
-    return { ok: false, error: 'No config' };
-  }
-  const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: ADMIN_EMAIL, pass: ADMIN_EMAIL_PASSWORD } });
-  const mailClient = { from: ADMIN_EMAIL, to: toEmail, subject, text: body };
-  const mailAdmin = { from: ADMIN_EMAIL, to: ADMIN_EMAIL, subject: `Copia - ${subject}`, text: `Copia enviada a ${toEmail}\n\nContenido:\n\n${body}` };
-
-  let notifiedSending = false;
-  // start email send promises
-  const sendPromise = (async () => {
-    await transporter.sendMail(mailClient);
-    await transporter.sendMail(mailAdmin);
-  })();
-
-  // after 3s, if still pending, notify user
-  const timer = setTimeout(() => {
-    notifiedSending = true;
-    try { bot.sendMessage(chatId, '📨 Estamos enviando tu cotización al correo. Te avisaremos cuando llegue.'); } catch (e) {}
-  }, 3000);
-
-  try {
-    await sendPromise;
-    clearTimeout(timer);
-    if (notifiedSending) {
-      await bot.sendMessage(chatId, '✅ Tu cotización ha sido enviada correctamente al correo indicado.');
-    } else {
-      // if we didn't notify "sending", still inform success (so user isn't left without message)
-      await bot.sendMessage(chatId, '✅ Tu cotización ha sido enviada correctamente al correo indicado.');
-    }
-    return { ok: true };
-  } catch (err) {
-    clearTimeout(timer);
-    console.error('Error enviando correo:', err);
-    try { await bot.sendMessage(chatId, '⚠️ Hubo un error enviando el correo. Intenta nuevamente más tarde.'); } catch (e) {}
-    return { ok: false, error: err };
-  }
-}
-
-// --- Flujo que manda la cotización por correo usando la función anterior ---
-async function sendCotizacionByEmailFlow(chatId, pending) {
-  if (!pending) return bot.sendMessage(chatId, 'No se encontró la cotización para enviar.');
-  const toEmail = pending.email;
-  if (!toEmail) return bot.sendMessage(chatId, 'No hay correo asociado a esta cotización.');
-  // construir cuerpo del correo (texto claro y agradecimiento)
-  const body = [
-    `Cotización J.I Asesoría & Courier`,
-    `ID: ${pending.id}`,
-    `Fecha: ${pending.fecha || new Date().toISOString()}`,
-    `Origen: ${pending.origen}`,
-    `Tipo: ${pending.tipoMercancia}`,
-    `Descripción: ${pending.descripcion || '-'}`,
-    `Peso declarado: ${pending.peso} ${pending.unidad}`,
-    `Peso facturable: ${pending.pesoFacturable} ${pending.unidadFacturable}`,
-    `Tarifa aplicada: $${pending.tarifa}`,
-    `Subtotal: $${(pending.subtotal||0).toFixed(2)}`,
-    `Descuento: $${((pending.subtotal||0) - (pending.total||0)).toFixed(2)} (${((pending.discountPercent||0)*100).toFixed(1)}%)`,
-    `Total: $${(pending.total||0).toFixed(2)}`,
-    '',
-    'Gracias por cotizar con J.I Asesoría & Courier. Estamos para servirte siempre.',
-    ''
-  ].join('\n');
-
-  // send and report progress
-  await sendPlainEmailWithProgress(chatId, toEmail, `Cotización J.I - ${pending.id}`, body);
-
-  // limpiar estado pendiente
-  const st = getUserState(chatId) || {};
-  delete st.pendingCotizacion;
-  setUserState(chatId, { modo: null });
-}
-
-// --- INICIAR SERVIDOR Y WEBHOOK ---
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
-  console.log(`✅ Bot activo en puerto ${PORT}`);
-  const webhookUrl = `${url}/${TELEGRAM_TOKEN}`;
-  try { await bot.setWebHook(webhookUrl); console.log(`🔗 Webhook configurado: ${webhookUrl}`); } catch (err) { console.error('Error configurando webhook:', err); }
-});
+// -----------------------------------------------------
+// EXPRESS KEEP ALIVE
+// -----------------------------------------------------
+app.get("/", (req, res) => res.send("BOT ACTIVO - JICO Courier"));
+app.listen(3000, () => console.log("SERVER RUNNING"));
