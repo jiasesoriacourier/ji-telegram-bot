@@ -1,7 +1,7 @@
 {
-  "name": "ji-telegram-bot",
+  "name": "jico-telegram-bot",
   "version": "1.0.0",
-  "description": "Bot de Telegram para J.I Asesoría & Courier",
+  "description": "Bot de Telegram para J.I Asesoría y Courier",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -12,8 +12,6 @@
   "dependencies": {
     "express": "^4.18.2",
     "node-telegram-bot-api": "^0.64.0",
-    "googleapis": "^125.0.0",
-    "nodemailer": "^6.9.14",
-    "pdfkit": "^0.15.0"
+    "googleapis": "^125.0.0"
   }
 }
