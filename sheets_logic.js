@@ -1,9 +1,10 @@
 const { google } = require('googleapis');
 
 // ---------------- CONFIG & CONSTANTES ----------------
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID || '10Y0tg1kh6UrVtEzSj_0JGsP7GmydRabM5imlEXTwjLM';
+// ¡IMPORTANTE! Asegúrate de tener estas variables de entorno configuradas
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID || '10Y0tg1kh6UrVtEzSj_0JGsP7GmydRabM5imlEXTwjLM'; 
 
-// --- TUS CONSTANTES (Extraídas del server.js original) ---
+// --- CONSTANTES ---
 const MERCANCIA_ESPECIAL = [ "colonias","perfume","perfumes","cremas","crema","cosmetico","cosmético","cosmeticos","cosméticos","maquillaje","medicamento","medicinas","suplemento","suplementos","vitamina","vitaminas","alimento","alimentos","semilla","semillas","agroquimico","agroquímico","fertilizante","lentes de contacto","quimico","químico","producto de limpieza","limpieza","bebida","bebidas","jarabe","tableta","capsula","cápsula" ];
 const MERCANCIA_PROHIBIDA = [ "licor","whisky","vodka","ron","alcohol","animal","vivo","piel","droga","drogas","cannabis","cbd","arma","armas","munición","municiones","explosivo","explosivos","pornograf","falsificado","falso","oro","plata","dinero","inflamable","corrosivo","radiactivo","gas","batería de litio","bateria de litio","tabaco","cigarro","cigarros" ];
 const KNOWN_BRANDS = [ "nike","adidas","puma","reebok","gucci","louis vuitton","lv","dior","chanel","tiffany","cartier","bulgari","bvlgari","rolex","pandora","piaget","graff","chopard","tous","david yurman","victoria's secret" ];
@@ -115,7 +116,7 @@ async function findClientByPhoneOrEmail(input) {
     for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         const name = row[0] || '';
-        const correo = (row[1] || '').toString().toLowerCase();
+        const correo = (row[1] || '').toString().toLowerCase(); // Columna B (índice 1)
         const contacto = row[3] || ''; // Columna D (índice 3)
 
         if (correo && correo === inputLower) {
@@ -203,5 +204,6 @@ module.exports = {
     getTrackingsByName,
     addQuoteToSheet,
     normalizePhone,
-    classifyProduct
+    classifyProduct,
+    getGoogleSheetsClient // <-- ¡CRUCIAL PARA LA CORRECCIÓN DE PREALERTA!
 };
