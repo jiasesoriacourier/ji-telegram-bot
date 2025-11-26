@@ -1,10 +1,10 @@
-// server.js - Bot Telegram + Google Sheets (centralizado, sin correos ni PDFs)
+// server.js - Bot Telegram + Google Sheets (completo, centralizado, sin correos ni PDFs)
 // Dependencias: npm i express node-telegram-bot-api googleapis
 // Variables de entorno requeridas:
 // - TELEGRAM_TOKEN
 // - GOOGLE_CREDENTIALS (JSON o base64)
-// - SPREADSHEET_ID (opcional, está por defecto si no la pasas)
-// Admin Telegram ID para recibir respaldo de cotizaciones: 7826072133
+// - SPREADSHEET_ID (opcional)
+// Admin Telegram ID por defecto: 7826072133
 
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
@@ -13,7 +13,7 @@ const { google } = require('googleapis');
 // ---------------- CONFIG ----------------
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID || '10Y0tg1kh6UrVtEzSj_0JGsP7GmydRabM5imlEXTwjLM';
-const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || '7826072133'; // string o número
+const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || '7826072133';
 
 if (!TELEGRAM_TOKEN) throw new Error('Falta TELEGRAM_TOKEN en variables de entorno');
 if (!process.env.GOOGLE_CREDENTIALS) throw new Error('Falta GOOGLE_CREDENTIALS en variables de entorno (JSON o Base64)');
@@ -31,24 +31,20 @@ function setUserState(chatId, state) { userStates.set(String(chatId), state); }
 function getUserState(chatId) { return userStates.get(String(chatId)); }
 function clearUserState(chatId) { userStates.delete(String(chatId)); }
 
-// ---------------- LISTAS Y CONSTANTES ----------------
-const MERCANCIA_ESPECIAL = [
-  "colonias","perfume","perfumes","cremas","crema","cosmetico","cosmético","cosmeticos","cosméticos","maquillaje",
-  "medicamento","medicinas","suplemento","suplementos","vitamina","vitaminas",
-  "alimento","alimentos","semilla","semillas","agroquimico","agroquímico","fertilizante",
-  "lentes de contacto","quimico","químico","producto de limpieza","limpieza","bebida","bebidas","jarabe","tableta","capsula","cápsula"
-];
-const MERCANCIA_PROHIBIDA = [
-  "licor","whisky","vodka","ron","alcohol","animal","vivo","piel","droga","drogas","cannabis","cbd",
-  "arma","armas","munición","municiones","explosivo","explosivos","pornograf","falsificado","falso",
-  "oro","plata","dinero","inflamable","corrosivo","radiactivo","gas","batería de litio","bateria de litio","tabaco","cigarro","cigarros"
-];
-const KNOWN_BRANDS = [
-  "nike","adidas","puma","reebok","gucci","louis vuitton","lv","dior","chanel","tiffany","cartier",
-  "bulgari","bvlgari","rolex","pandora","piaget","graff","chopard","tous","david yurman","victoria's secret"
-];
+// ---------------- CONSTANTES ----------------
+const MERCANCIA_ESPECIAL = [ "colonias","perfume","perfumes","cremas","crema","cosmetico","cosmético","cosmeticos","cosméticos","maquillaje","medicamento","medicinas","suplemento","suplementos","vitamina","vitaminas","alimento","alimentos","semilla","semillas","agroquimico","agroquímico","fertilizante","lentes de contacto","quimico","químico","producto de limpieza","limpieza","bebida","bebidas","jarabe","tableta","capsula","cápsula" ];
+const MERCANCIA_PROHIBIDA = [ "licor","whisky","vodka","ron","alcohol","animal","vivo","piel","droga","drogas","cannabis","cbd","arma","armas","munición","municiones","explosivo","explosivos","pornograf","falsificado","falso","oro","plata","dinero","inflamable","corrosivo","radiactivo","gas","batería de litio","bateria de litio","tabaco","cigarro","cigarros" ];
+const KNOWN_BRANDS = [ "nike","adidas","puma","reebok","gucci","louis vuitton","lv","dior","chanel","tiffany","cartier","bulgari","bvlgari","rolex","pandora","piaget","graff","chopard","tous","david yurman","victoria's secret" ];
 
-const VALID_ORIGINS = ['miami','madrid','colombia','mexico','china']; // validación de origen
+const VALID_ORIGINS = ['miami','madrid','colombia','mexico','china']; // internal names
+// Mapping for prealert origin display -> sheet stored value
+const PREALERTA_ORIGINS = {
+  'estados_unidos': 'Estados Unidos',
+  'colombia': 'Colombia',
+  'espana': 'España',
+  'china': 'China',
+  'mexico': 'Mexico'
+};
 
 // ---------------- GOOGLE SHEETS CLIENT ----------------
 async function getGoogleSheetsClient() {
@@ -85,27 +81,21 @@ function extractRange(data, startRow, endRow, startCol, endCol) {
 }
 
 // Normaliza teléfono a formato simple (solo dígitos; si inicia con 506 se quita el prefijo)
-// Resultado: string de dígitos sin prefijo + ni 00; ejemplo: '+50688885555' -> '88885555'
 function normalizePhone(p) {
   if (!p) return '';
   let s = p.toString().trim();
-  // eliminar todo lo que no sea dígito
   s = s.replace(/\D+/g, '');
-  // si comienza con '506' (Costa Rica) removerlo para almacenar formato simple
   if (s.startsWith('506')) s = s.slice(3);
   return s;
 }
-
-// comparador flexible: true si los dos números coinciden (compara sin prefijos)
 function phoneMatches(a, b) {
   const na = normalizePhone(a);
   const nb = normalizePhone(b);
   if (!na || !nb) return false;
-  // match endsWith to allow country prefixes in sheet
   return na === nb || na.endsWith(nb) || nb.endsWith(na);
 }
 
-// ---------------- LECTURA DE DIRECCIONES ----------------
+// ---------------- DIRECCIONES ----------------
 async function getDirecciones(nombreCliente = 'Nombre de cliente') {
   const sheets = await getGoogleSheetsClient();
   const sheetVals = sheets.spreadsheets.values;
@@ -130,7 +120,7 @@ function mainMenuKeyboard() {
     keyboard: [
       ['/mi_casillero', '/crear_casillero'],
       ['/cotizar', '/consultar_tracking'],
-      ['/saldo', '/contactar']
+      ['/saldo', '/contactar', '/prealerta']
     ],
     resize_keyboard: true,
     one_time_keyboard: false
@@ -150,11 +140,11 @@ function categoriaInlineKeyboard() {
 function casilleroPaisesKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: '🇺🇸 Miami', callback_data: 'CASILLERO|miami' }],
-      [{ text: '🇪🇸 Madrid', callback_data: 'CASILLERO|madrid' }],
-      [{ text: '🇨🇴 Colombia', callback_data: 'CASILLERO|colombia' }],
-      [{ text: '🇲🇽 México', callback_data: 'CASILLERO|mexico' }],
-      [{ text: '🇨🇳 China', callback_data: 'CASILLERO|china' }]
+      [{ text: '🇺🇸 Miami', callback_data: 'CASILLERO_SHOW|miami' }],
+      [{ text: '🇪🇸 Madrid', callback_data: 'CASILLERO_SHOW|madrid' }],
+      [{ text: '🇨🇴 Colombia', callback_data: 'CASILLERO_SHOW|colombia' }],
+      [{ text: '🇲🇽 México', callback_data: 'CASILLERO_SHOW|mexico' }],
+      [{ text: '🇨🇳 China', callback_data: 'CASILLERO_SHOW|china' }]
     ]
   };
 }
@@ -167,6 +157,17 @@ function contactarKeyboard() {
     ]
   };
 }
+function prealertOriginKeyboard() {
+  return {
+    keyboard: [
+      ['Estados Unidos','Colombia'],
+      ['España','China'],
+      ['Mexico','Cancelar']
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: true
+  };
+}
 
 // ---------------- CLASIFICACIÓN ----------------
 function classifyProduct(obj) {
@@ -177,28 +178,24 @@ function classifyProduct(obj) {
   for (const w of MERCANCIA_PROHIBIDA) {
     if (text.includes(w)) return { tipo: 'Prohibida', tags: [w] };
   }
-
   if (categoriaSeleccionada.includes('réplica') || categoriaSeleccionada.includes('replica')) {
     return origen === 'colombia' ? { tipo: 'Especial', tags: ['replica'] } : { tipo: 'General', tags: ['replica'] };
   }
-
   const foundSpecial = [];
   for (const w of MERCANCIA_ESPECIAL) {
     if (text.includes(w)) foundSpecial.push(w);
   }
   if (foundSpecial.length) return { tipo: 'Especial', tags: foundSpecial };
-
   for (const b of KNOWN_BRANDS) {
     if (text.includes(b)) {
       return origen === 'colombia' ? { tipo: 'Especial', tags: ['brand:'+b] } : { tipo: 'General', tags: ['brand:'+b] };
     }
   }
-
   return { tipo: 'General', tags: [] };
 }
 
 // ---------------- SHEETS: Buscar cliente / Añadir cliente ----------------
-// Clientes sheet structure expected: A:Nombre, B:Correo, C:unused, D:Contacto, E:F unused, G:Direccion, H:Pendiente
+// Estructura esperada: A:Nombre, B:Correo, C:unused, D:Contacto, E:F unused, G:Direccion, H:Pendiente
 async function findClientByPhone(phone) {
   const normalized = normalizePhone(phone);
   const sheets = await getGoogleSheetsClient();
@@ -206,7 +203,7 @@ async function findClientByPhone(phone) {
   const rows = res.data.values || [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const contactCell = row[3] || ''; // columna D index 3
+    const contactCell = row[3] || '';
     if (phoneMatches(contactCell, normalized)) {
       return {
         rowIndex: i+1,
@@ -215,7 +212,7 @@ async function findClientByPhone(phone) {
         correo: row[1] || '',
         contacto: contactCell || '',
         direccion: row[6] || '',
-        saldo: parseFloat(row[7]) || 0 // columna H index 7 (pendiente) -> en colones
+        saldo: parseFloat(row[7]) || 0
       };
     }
   }
@@ -224,7 +221,6 @@ async function findClientByPhone(phone) {
 
 async function addClientToSheet({ nombre, correo, contacto, direccion }) {
   const sheets = await getGoogleSheetsClient();
-  // filas A..H (indices 0..7): A nombre, B correo, C '', D contacto, E '', F '', G direccion, H saldo(0)
   const values = [[ nombre || '', correo || '', '', contacto || '', '', '', direccion || '', 0 ]];
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
@@ -293,29 +289,26 @@ bot.onText(/\/start|\/ayuda|\/help/, (msg) => {
   const name = (msg.from && msg.from.first_name) ? msg.from.first_name : 'Cliente';
   bot.sendMessage(chatId, `Hola ${name} 👋\nUsa /menu para ver las opciones.`, { reply_markup: mainMenuKeyboard() });
 });
-
-bot.onText(/\/menu/, (msg) => {
-  bot.sendMessage(msg.chat.id, 'Menú principal:', { reply_markup: mainMenuKeyboard() });
-});
+bot.onText(/\/menu/, (msg) => bot.sendMessage(msg.chat.id, 'Menú principal:', { reply_markup: mainMenuKeyboard() }));
 
 // Crear casillero - inicia flujo
 bot.onText(/\/crear_casillero/, (msg) => {
   const chatId = msg.chat.id;
   setUserState(chatId, { modo: 'CREAR_NOMBRE' });
-  bot.sendMessage(chatId, 'Vamos a crear tu casillero. Primero, escribe tu *Nombre completo* (mínimo 1 nombre + 2 apellidos).', { parse_mode: 'Markdown' });
+  bot.sendMessage(chatId, 'Vamos a crear tu casillero. Primero, escribe tu *Nombre completo* (mínimo 1 nombre y 2 apellidos).', { parse_mode: 'Markdown' });
 });
 
-// mi_casillero - pide teléfono y devuelve tracking (si existe)
+// mi_casillero - pide teléfono y muestra TECLADO de casilleros si está registrado
 bot.onText(/\/mi_casillero/, (msg) => {
   const chatId = msg.chat.id;
   setUserState(chatId, { modo: 'CHECK_CASILLERO_PHONE' });
   bot.sendMessage(chatId, 'Para verificar tu casillero, por favor escribe el *número de teléfono* con el que te registraste (ej: 88885555).', { parse_mode: 'Markdown' });
 });
 
-// consultar_tracking (igual que mi_casillero pero con otra etiqueta)
+// consultar_tracking - pide teléfono y luego devuelve trackings paginados
 bot.onText(/\/consultar_tracking/, (msg) => {
   const chatId = msg.chat.id;
-  setUserState(chatId, { modo: 'CHECK_CASILLERO_PHONE' });
+  setUserState(chatId, { modo: 'CONSULTAR_TRACK_PHONE' });
   bot.sendMessage(chatId, 'Escribe el número de teléfono con el que te registraste para ver tus paquetes (ej: 88885555).');
 });
 
@@ -331,11 +324,17 @@ bot.onText(/\/contactar/, (msg) => {
   bot.sendMessage(msg.chat.id, 'Opciones de contacto:', { reply_markup: contactarKeyboard() });
 });
 
-// cotizar - inicio flujo (ahora con teclado de orígenes válidos)
+// prealerta - iniciar flujo
+bot.onText(/\/prealerta/, (msg) => {
+  const chatId = msg.chat.id;
+  setUserState(chatId, { modo: 'PREALERTA_TRACKING_NUMBER' });
+  bot.sendMessage(chatId, 'Vamos a crear una prealerta. Ingresa el *número de tracking* (exacto).', { parse_mode: 'Markdown' });
+});
+
+// cotizar - inicio flujo (teclado de orígenes válidos)
 bot.onText(/\/cotizar/, (msg) => {
   const chatId = msg.chat.id;
   setUserState(chatId, { modo: 'COTIZAR_ORIGEN' });
-  // usar teclado simple con orígenes
   const kb = {
     keyboard: [
       ['miami','madrid'],
@@ -348,7 +347,7 @@ bot.onText(/\/cotizar/, (msg) => {
   bot.sendMessage(chatId, 'Comenzamos la cotización. Selecciona el ORIGEN (toca una opción):', { reply_markup: kb });
 });
 
-// callbacks inline (categoría, casillero, contactos, tracking pages)
+// ---------------- CALLBACKS ----------------
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data || '';
@@ -362,22 +361,23 @@ bot.on('callback_query', async (query) => {
       setUserState(chatId, state);
       return bot.sendMessage(chatId, `Has seleccionado *${categoria}*. Ahora describe el producto.`, { parse_mode: 'Markdown' });
     }
-    if (data.startsWith('CASILLERO|')) {
+
+    // show casillero address after verification flow
+    if (data.startsWith('CASILLERO_SHOW|')) {
       const pais = data.split('|')[1] || '';
-      if (pais === 'colombia') {
-        return bot.sendMessage(chatId, '¿Tu mercancía requiere permiso de importación?', { reply_markup: { inline_keyboard: [[{ text: '📦 Con permiso o réplicas', callback_data: 'COL_CASILLERO|con' }],[{ text: '📦 Sin permiso', callback_data: 'COL_CASILLERO|sin' }]] } });
-      } else {
-        const nombre = (query.from && query.from.first_name) ? query.from.first_name : 'Cliente';
-        const dire = await getDirecciones(nombre);
-        let direccion = 'No disponible';
-        if (pais === 'miami') direccion = dire.miami;
-        else if (pais === 'madrid') direccion = dire.espana || dire.miami;
-        else if (pais === 'mexico') direccion = dire.mexico;
-        else if (pais === 'china') direccion = dire.china;
-        const nombres = { miami:'Miami', madrid:'Madrid', mexico:'Ciudad de México', china:'China', colombia:'Colombia' };
-        return bot.sendMessage(chatId, `📍 *Dirección en ${nombres[pais]}*:\n\n${direccion}`, { parse_mode: 'Markdown' });
-      }
+      const st = getUserState(chatId) || {};
+      const clienteNombre = (st && st.client && st.client.nombre) ? st.client.nombre : (query.from && query.from.first_name) ? query.from.first_name : 'Cliente';
+      const dire = await getDirecciones(clienteNombre);
+      let direccion = 'No disponible';
+      if (pais === 'miami') direccion = dire.miami;
+      else if (pais === 'madrid') direccion = dire.espana || dire.miami;
+      else if (pais === 'mexico') direccion = dire.mexico;
+      else if (pais === 'china') direccion = dire.china;
+      else if (pais === 'colombia') direccion = dire.colombiaCon || dire.colombiaSin || 'No disponible';
+      const nombres = { miami:'Miami', madrid:'Madrid', mexico:'Ciudad de México', china:'China', colombia:'Colombia' };
+      return bot.sendMessage(chatId, `📍 *Dirección en ${nombres[pais]}*:\n\n${direccion}`, { parse_mode: 'Markdown' });
     }
+
     if (data.startsWith('COL_CASILLERO|')) {
       const tipo = data.split('|')[1];
       const nombre = (query.from && query.from.first_name) ? query.from.first_name : 'Cliente';
@@ -412,7 +412,6 @@ bot.on('callback_query', async (query) => {
       const st = getUserState(chatId) || {};
       const items = st.itemsCache || [];
       if (!items.length) return bot.sendMessage(chatId, 'No hay paquetes para exportar.');
-      // crear texto simple y enviar al admin como respaldo (evitamos PDF)
       let txt = `Respaldo de trackings (${items.length}):\n`;
       items.forEach((it,i)=> { txt += `\n${i+1}. ${it.tracking} — ${it.origen} — ${it.estado} — ${it.peso}\nComentarios: ${it.comentarios||'-'}\n`; });
       await bot.sendMessage(ADMIN_TELEGRAM_ID, txt);
@@ -425,7 +424,7 @@ bot.on('callback_query', async (query) => {
   }
 });
 
-// ---------------- MENSAJE LIBRE (flujo: registro, cotizar, consultas) ----------------
+// ---------------- MENSAJE LIBRE (flujo: registro, cotizar, prealerta, consultas) ----------------
 bot.on('message', async (msg) => {
   try {
     // No procesamos comandos aquí (los procesa onText)
@@ -470,7 +469,7 @@ bot.on('message', async (msg) => {
       return bot.sendMessage(chatId, `✅ Registro completado. Hemos creado tu casillero para *${state.nombre}*.`, { parse_mode: 'Markdown' });
     }
 
-    // --- CHECK CASILLERO (mi_casillero & consultar_tracking) ---
+    // --- CHECK CASILLERO PHONE -> luego mostrar casillero selection ---
     if (state.modo === 'CHECK_CASILLERO_PHONE') {
       const phone = normalizePhone(text);
       const client = await findClientByPhone(phone);
@@ -478,15 +477,22 @@ bot.on('message', async (msg) => {
         clearUserState(chatId);
         return bot.sendMessage(chatId, 'No encontramos un registro con ese número. Usa /crear_casillero para registrarte.');
       }
-      // fetch trackings
+      // guardamos cliente en estado y pedimos origen para mostrar casillero
+      state.client = client;
+      state.modo = 'SHOW_CASILLERO_SELECT';
+      setUserState(chatId, state);
+      return bot.sendMessage(chatId, 'Selecciona el país del casillero que quieres ver:', { reply_markup: casilleroPaisesKeyboard() });
+    }
+
+    // --- CONSULTAR_TRACKING por teléfono ---
+    if (state.modo === 'CONSULTAR_TRACK_PHONE') {
+      const phone = normalizePhone(text);
+      const client = await findClientByPhone(phone);
+      clearUserState(chatId);
+      if (!client) return bot.sendMessage(chatId, 'No encontramos un registro con ese número. Usa /crear_casillero para registrarte.');
       const items = await getTrackingsByName(client.nombre);
-      if (!items || items.length === 0) {
-        clearUserState(chatId);
-        return bot.sendMessage(chatId, 'No encontramos paquetes asociados a tu casillero.');
-      }
-      // enviar paginado
-      await sendTrackingList(chatId, items, 1);
-      return;
+      if (!items || items.length === 0) return bot.sendMessage(chatId, 'No encontramos paquetes asociados a tu casillero.');
+      return sendTrackingList(chatId, items, 1);
     }
 
     // --- CHECK SALDO ---
@@ -495,8 +501,56 @@ bot.on('message', async (msg) => {
       const client = await findClientByPhone(phone);
       clearUserState(chatId);
       if (!client) return bot.sendMessage(chatId, 'No encontramos un registro con ese número. Usa /crear_casillero para registrarte.');
-      // saldo en colones (columna H)
-      return bot.sendMessage(chatId, `💳 Saldo pendiente: ¢${(client.saldo || 0).toFixed(0)}`); // entero colones
+      return bot.sendMessage(chatId, `💳 Saldo pendiente: ¢${(client.saldo || 0).toFixed(0)}`);
+    }
+
+    // --- PREALERTA FLOW ---
+    if (state.modo === 'PREALERTA_TRACKING_NUMBER') {
+      // save tracking number and ask origin
+      state.preTracking = text;
+      state.modo = 'PREALERTA_ORIGIN';
+      setUserState(chatId, state);
+      return bot.sendMessage(chatId, 'Selecciona el ORIGEN del paquete (toca una opción):', { reply_markup: prealertOriginKeyboard() });
+    }
+    if (state.modo === 'PREALERTA_ORIGIN') {
+      const val = text.toLowerCase();
+      // accept Spanish names: Estados Unidos, Colombia, España, China, Mexico
+      let originStored = null;
+      if (val.startsWith('est')) originStored = 'Estados Unidos';
+      else if (val.startsWith('col')) originStored = 'Colombia';
+      else if (val.startsWith('esp') || val.startsWith('madr') ) originStored = 'España';
+      else if (val.startsWith('chi')) originStored = 'China';
+      else if (val.startsWith('mex')) originStored = 'Mexico';
+      else if (val === 'cancelar') { clearUserState(chatId); return bot.sendMessage(chatId, 'Prealerta cancelada.'); }
+      if (!originStored) return bot.sendMessage(chatId, 'Origen inválido. Selecciona uno de: Estados Unidos, Colombia, España, China, Mexico.');
+      state.preOrigin = originStored;
+      state.modo = 'PREALERTA_OBS';
+      setUserState(chatId, state);
+      return bot.sendMessage(chatId, 'Ingresa observaciones (opcional). Si no hay, escribe "NO".');
+    }
+    if (state.modo === 'PREALERTA_OBS') {
+      const obsText = (text.toLowerCase() === 'no') ? '' : text;
+      const tracking = state.preTracking;
+      const origin = state.preOrigin;
+      const clienteNombre = (msg.from && (msg.from.first_name || msg.from.username)) ? (msg.from.first_name || msg.from.username) : 'Cliente Telegram';
+      // guardar en Datos: A tracking, B cliente, D origen, I observaciones (indices 0,1,3,8)
+      const sheets = await getGoogleSheetsClient();
+      const row = new Array(9).fill('');
+      row[0] = tracking;
+      row[1] = clienteNombre;
+      row[3] = origin;
+      row[8] = obsText;
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Datos!A:I',
+        valueInputOption: 'RAW',
+        resource: { values: [row] }
+      });
+      // notificar admin
+      const adminMsg = `📣 Prealerta recibida\nTracking: ${tracking}\nCliente: ${clienteNombre}\nOrigen: ${origin}\nObservaciones: ${obsText || '-'}`;
+      await bot.sendMessage(ADMIN_TELEGRAM_ID, adminMsg);
+      clearUserState(chatId);
+      return bot.sendMessage(chatId, '✅ Prealerta registrada. Gracias — hemos guardado el tracking y enviado respaldo al administrador.');
     }
 
     // --- COTIZAR FLOW ---
@@ -539,26 +593,19 @@ bot.on('message', async (msg) => {
       state.entregaGAM = ['si','s'].includes(ans);
       state.modo = 'COTIZAR_EMAIL_OR_CLIENT';
       setUserState(chatId, state);
-      // pedir correo (opcional) o preguntar si ya está registrado? Vamos a pedir correo para enviarlo en chat (en el mismo chat se mostrará)
-      return bot.sendMessage(chatId, 'Ingresa tu correo (opcional) para recibir la cotización por correo si lo deseas, de lo contrario responde "NO".');
+      return bot.sendMessage(chatId, 'Ingresa tu correo (opcional) para registro interno, de lo contrario responde "NO".');
     }
 
     if (state.modo === 'COTIZAR_EMAIL_OR_CLIENT') {
-      // si usuario escribe "NO" se omite correo
       const emailText = text.toLowerCase();
       if (emailText === 'no') state.email = null;
-      else state.email = text; // lo guardamos aunque no usaremos correo (por ahora campo informativo)
-      // mostramos mensaje de "procesando / enviando respaldo"
+      else state.email = text;
       await bot.sendMessage(chatId, 'Procesando cotización y guardando respaldo, por favor espera un momento...');
-      // calcular y registrar (guardado en Sheets y reenvío al admin)
       try {
         const cotizacion = await calcularYRegistrarCotizacionRespaldo(chatId, state);
         clearUserState(chatId);
-
-        // mostrar resultados al cliente (en el chat)
         const fechaLocal = new Date().toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
-        const msgResp = `✅ Cotización generada\nID: ${cotizacion.id}\nFecha: ${fechaLocal}\nOrigen: ${state.origen}\nPeso facturable: ${cotizacion.pesoFacturable} ${cotizacion.unidadFacturable}\nSubtotal: ¢${cotizacion.subtotalCRC.toFixed(0)}\nDescuento: ¢${cotizacion.discountAmountCRC.toFixed(0)} (${(cotizacion.discountPercent*100).toFixed(1)}%)\nCosto entrega: ¢${cotizacion.deliveryCostCRC.toFixed(0)}\nTotal (con entrega): ¢${cotizacion.totalWithDeliveryCRC.toFixed(0)}\n(Tipo de cambio usado: ${cotizacion.exchangeRate})`;
-
+        const msgResp = `✅ Cotización generada\nID: ${cotizacion.id}\nFecha: ${fechaLocal}\nOrigen: ${state.origen}\nPeso facturable: ${cotizacion.pesoFacturable} ${cotizacion.unidadFacturable}\nSubtotal: ¢${Math.round(cotizacion.subtotalCRC)}\nDescuento: ¢${Math.round(cotizacion.discountAmountCRC)} (${(cotizacion.discountPercent*100).toFixed(1)}%)\nCosto entrega: ¢${Math.round(cotizacion.deliveryCostCRC)}\nTotal (con entrega): ¢${Math.round(cotizacion.totalWithDeliveryCRC)}\n(Tipo de cambio usado: ${cotizacion.exchangeRate})`;
         await bot.sendMessage(chatId, msgResp);
         return;
       } catch (err) {
@@ -575,15 +622,12 @@ bot.on('message', async (msg) => {
 });
 
 // ---------------- LECTURA DE TARIFAS ----------------
-// lee celdas B2:B15 y J1..J3 para delivery + tipo de cambio
 async function leerTarifas() {
   const sheets = await getGoogleSheetsClient();
-  // leemos la columna B2:B15 (índices conocidos)
   const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Tarifas!B2:B15' });
   const values = (res.data.values || []).map(r => r[0]);
   const val = idx => parseFloat(values[idx]) || 0;
 
-  // leer J1..J3 (entrega y tipo de cambio - la hoja debe tener J1=delivery en colones, J3=tipo de cambio)
   let jVals = {};
   try {
     const r2 = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Tarifas!J1:J3' });
@@ -606,7 +650,7 @@ async function leerTarifas() {
   };
 }
 
-// ---------------- GUARDAR EN HISTORIAL (igual) ----------------
+// ---------------- GUARDAR EN HISTORIAL ----------------
 async function guardarEnHistorial(data) {
   const sheets = await getGoogleSheetsClient();
   const now = new Date().toISOString();
@@ -618,44 +662,25 @@ async function guardarEnHistorial(data) {
   await sheets.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_ID, range: 'Historial!A:Z', valueInputOption: 'RAW', resource: { values } });
 }
 
-// ---------------- GUARDAR COTIZACIÓN EN HOJA "Cotizaciones" Y REENVIAR AL ADMIN ----------------
-/*
-Cotizaciones columns que pediste:
-A Fecha Cot (a)
-B Cliente (b)
-C Origen (c)
-D Peso (d)
-E Unidad (e)
-F Tipo Permiso (f) -> general o especial
-G Mercancía (g)
-H Sub Total (h)  -- en colones
-I Descuento (i)  -- en colones
-J Total (j)      -- subtotal - descuento (colones)
-K Costo Entrega (k) -- colones
-L Total con Entrega (l) -- colones
-M Tipo de Cambio (m)
-N (vacío)
-O ID de cotización (o)  <-- columna O (índice 14)
-*/
+// ---------------- GUARDAR COTIZACIÓN EN HOJA "Cotizaciones" Y NOTIFICAR ADMIN ----------------
 async function saveCotizacionToSheetAndNotifyAdmin(payload) {
   const sheets = await getGoogleSheetsClient();
-  // construir fila con 15 columnas (A..O)
   const row = new Array(15).fill('');
-  row[0] = payload.fechaLocal || ''; // A
-  row[1] = payload.cliente || ''; // B
-  row[2] = payload.origen || ''; // C
-  row[3] = payload.peso || ''; // D
-  row[4] = payload.unidad || ''; // E
-  row[5] = payload.tipoPermiso || ''; // F
-  row[6] = payload.mercancia || ''; // G
-  row[7] = Math.round(payload.subtotalCRC || 0); // H
-  row[8] = Math.round(payload.discountAmountCRC || 0); // I
-  row[9] = Math.round(payload.totalCRC || 0); // J
-  row[10] = Math.round(payload.deliveryCostCRC || 0); // K
-  row[11] = Math.round(payload.totalWithDeliveryCRC || 0); // L
-  row[12] = payload.exchangeRate || ''; // M
-  row[13] = ''; // N
-  row[14] = payload.id || ''; // O
+  row[0] = payload.fechaLocal || '';
+  row[1] = payload.cliente || '';
+  row[2] = payload.origen || '';
+  row[3] = payload.peso || '';
+  row[4] = payload.unidad || '';
+  row[5] = payload.tipoPermiso || '';
+  row[6] = payload.mercancia || '';
+  row[7] = Math.round(payload.subtotalCRC || 0);
+  row[8] = Math.round(payload.discountAmountCRC || 0);
+  row[9] = Math.round(payload.totalCRC || 0);
+  row[10] = Math.round(payload.deliveryCostCRC || 0);
+  row[11] = Math.round(payload.totalWithDeliveryCRC || 0);
+  row[12] = payload.exchangeRate || '';
+  row[13] = '';
+  row[14] = payload.id || '';
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
@@ -664,7 +689,6 @@ async function saveCotizacionToSheetAndNotifyAdmin(payload) {
     resource: { values: [row] }
   });
 
-  // preparar mensaje para admin (texto legible)
   const adminMsg = [
     `📣 Nueva cotización (respaldo)`,
     `ID: ${payload.id}`,
@@ -695,12 +719,11 @@ function getDiscountPercentByPeso(peso) {
   return 0.00;
 }
 
-// ---------------- CÁLCULO Y RESPALDO DE COTIZACIÓN (sin email, con guardado en sheet y notificación admin) ----------------
+// ---------------- CÁLCULO Y RESPALDO DE COTIZACIÓN ----------------
 async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
-  // state contiene: origen, peso, unidad, tipoMercancia, descripcion, entregaGAM (bool), email (opcional), categoriaSeleccionada
   const tarifas = await leerTarifas();
-  const exchangeRate = tarifas.j.exchangeRate || 1; // tipo de cambio (USD -> CRC)
-  const deliveryCostCRC = tarifas.j.deliveryCRC || 0; // en colones
+  const exchangeRate = tarifas.j.exchangeRate || 1;
+  const deliveryCostCRC = tarifas.j.deliveryCRC || 0;
 
   const { origen, peso, unidad, tipoMercancia, descripcion, entregaGAM } = state;
   let tarifaUSD = 0;
@@ -741,23 +764,16 @@ async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
     throw new Error('Origen no soportado');
   }
 
-  // Convertir a colones
   const subtotalCRC = subtotalUSD * exchangeRate;
-
-  // Descuento por peso (usar pesoFacturable en su unidad)
   const discountPercent = getDiscountPercentByPeso(pesoFacturable);
   const discountAmountCRC = subtotalCRC * discountPercent;
   const totalCRC = subtotalCRC - discountAmountCRC;
-
-  // Costo entrega: si dentro GAM cobrar J1 (colones), si fuera GAM no cobrar y agregar observación
   const deliveryCost = entregaGAM ? deliveryCostCRC : 0;
   const totalWithDeliveryCRC = totalCRC + deliveryCost;
 
-  // ID y fecha local (Costa Rica)
   const id = 'COT-' + Math.random().toString(36).substr(2,9).toUpperCase();
   const fechaLocal = new Date().toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
 
-  // guardar en Historial (opcional) y en "Cotizaciones" y notificar al admin
   const payload = {
     id,
     fechaLocal,
@@ -778,17 +794,15 @@ async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
     unidadFacturable
   };
 
-  // Guardar en hoja "Cotizaciones"
   await saveCotizacionToSheetAndNotifyAdmin({
     ...payload,
-    subtotalCRC: subtotalCRC,
-    discountAmountCRC: discountAmountCRC,
-    totalCRC: totalCRC,
-    totalWithDeliveryCRC: totalWithDeliveryCRC,
+    subtotalCRC,
+    discountAmountCRC,
+    totalCRC,
+    totalWithDeliveryCRC,
     exchangeRate
   });
 
-  // Guardar en Historial para rastreo
   await guardarEnHistorial({
     id,
     fecha: new Date().toISOString(),
@@ -803,8 +817,8 @@ async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
     tarifa: tarifaUSD,
     subtotal: subtotalUSD,
     discountPercent,
-    discountAmount: discountAmountCRC / exchangeRate, // en USD equivalente (opcional)
-    total: totalCRC / exchangeRate // en USD equivalente (opcional)
+    discountAmount: discountAmountCRC / exchangeRate,
+    total: totalCRC / exchangeRate
   });
 
   return {
