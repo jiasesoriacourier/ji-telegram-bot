@@ -11,25 +11,48 @@ const KNOWN_BRANDS = [ "nike","adidas","puma","reebok","gucci","louis vuitton","
 // --------------------------------------------------------
 
 
-// ---------------- GOOGLE SHEETS CLIENT ----------------
+// ---------------- GOOGLE SHEETS CLIENT (CON DEPURACIÓN) ----------------
 async function getGoogleSheetsClient() {
     let credsRaw = process.env.GOOGLE_CREDENTIALS;
-    if (!credsRaw) throw new Error('GOOGLE_CREDENTIALS no está definida.');
+    if (!credsRaw) {
+        console.error('ERROR DE CREDENCIALES: GOOGLE_CREDENTIALS no está definida.');
+        throw new Error('Falta la variable de credenciales de Google.');
+    }
+    
+    let credentials;
+    try {
+        // 1. Intentar decodificar si no parece JSON directo
+        if (!credsRaw.trim().startsWith('{')) {
+            // Asume Base64 si no empieza con {
+            console.log('INTENTO DEPURACIÓN: Decodificando GOOGLE_CREDENTIALS (asumiendo Base64)...');
+            credsRaw = Buffer.from(credsRaw, 'base64').toString('utf8');
+        }
+        // 2. Intentar parsear el JSON
+        credentials = JSON.parse(credsRaw);
+        
+        // **DEPURACIÓN: VERIFICAR LECTURA**
+        console.log('✅ CREDENCIALES LEÍDAS Y PARSEADAS. ID de Proyecto:', credentials.project_id);
+        
+    } catch (err) {
+        console.error('❌ ERROR GRAVE: Fallo al parsear GOOGLE_CREDENTIALS. ¿Es un JSON válido?', err.message);
+        throw new Error('Error de configuración de las credenciales de Google (JSON inválido).');
+    }
     
     try {
-        // Decodificación Base64 si no es un JSON crudo
-        if (!credsRaw.trim().startsWith('{')) credsRaw = Buffer.from(credsRaw, 'base64').toString('utf8');
-        const credentials = JSON.parse(credsRaw);
-        
         const auth = new google.auth.GoogleAuth({
             credentials,
             scopes: ['https://www.googleapis.com/auth/spreadsheets']
         });
         const client = await auth.getClient();
+        
+        // **DEPURACIÓN: AUTENTICACIÓN EXITOSA**
+        console.log('✅ AUTENTICACIÓN EXITOSA con Google.');
+
         return google.sheets({ version: 'v4', auth: client });
+        
     } catch (err) {
-        console.error('Error parseando GOOGLE_CREDENTIALS:', err);
-        throw new Error('Error de autenticación con Google Sheets.');
+        console.error('❌ ERROR GRAVE: Fallo en la autenticación o conexión a Sheets. Revisa permisos en la hoja de cálculo.', err.message);
+        throw new Error('Error de autenticación o permisos con Google Sheets.');
     }
 }
 
@@ -205,5 +228,5 @@ module.exports = {
     addQuoteToSheet,
     normalizePhone,
     classifyProduct,
-    getGoogleSheetsClient // <-- ¡CRUCIAL PARA LA CORRECCIÓN DE PREALERTA!
+    getGoogleSheetsClient // Exportamos la función de conexión.
 };
