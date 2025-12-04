@@ -766,33 +766,58 @@ bot.on('message', async (msg) => {
   }
 });
 
-// ---------------- LECTURA DE TARIFAS ----------------
+// ---------------- LECTURA DE TARIFAS ---------------- 
 async function leerTarifas() {
   const sheets = await getGoogleSheetsClient();
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Tarifas!B2:B15' });
-  const values = (res.data.values || []).map(r => r[0]);
-  const val = idx => parseFloat(values[idx]) || 0;
-  let jVals = {};
-  try {
-    const r2 = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Tarifas!J1:J3' });
-    const arr = (r2.data.values || []).map(r => r[0]);
-    jVals.deliveryCRC = parseFloat(arr[0]) || 0;
-    jVals.exchangeRate = parseFloat(arr[2]) || 1;
-  } catch (e) {
-    console.warn('No se pudo leer Tarifa J1/J3: ', e);
-    jVals.deliveryCRC = 0;
-    jVals.exchangeRate = 1;
-  }
-  return {
-    miami: { sinPermiso: val(0) || 6.0, conPermiso: val(1) || 7.0 },
-    colombia: { sinPermiso: val(4) || 9.0, conPermiso: val(5) || 16.0 },
-    espana: { sinPermiso: val(8) || 8.5, conPermiso: val(9) || 9.9 },
-    china: { tarifa: val(11) || 10.0 },
-    mexico: { tarifa: val(13) || 12.0 },
-    j: jVals
+  // Defaults por si algo falla
+  const defaults = {
+    miami: { sinPermiso: 6.0, conPermiso: 7.0 },
+    colombia: { sinPermiso: 9.0, conPermiso: 16.0 },
+    espana: { sinPermiso: 8.5, conPermiso: 9.9 },
+    china: { tarifa: 10.0 },
+    mexico: { tarifa: 12.0 },
+    j: { deliveryCRC: 0, exchangeRate: 1 }
   };
-}
 
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Tarifas!B2:B15'
+    });
+    const values = (res.data.values || []).map(r => r[0]);
+    const val = idx => {
+      const v = parseFloat(values[idx]);
+      return Number.isFinite(v) ? v : 0;
+    };
+
+    // leer J1..J3 (entrega en colones y tipo de cambio en J3)
+    let jVals = { deliveryCRC: 0, exchangeRate: 1 };
+    try {
+      const r2 = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Tarifas!J1:J3' });
+      const arr = (r2.data.values || []).map(r => r[0]);
+      const d = parseFloat(arr[0]);
+      const x = parseFloat(arr[2]);
+      jVals.deliveryCRC = Number.isFinite(d) ? d : 0;
+      jVals.exchangeRate = Number.isFinite(x) ? x : 1;
+    } catch (innerErr) {
+      console.warn('leerTarifas: no se pudo leer J1:J3, usando valores por defecto', innerErr && innerErr.message);
+      jVals = { deliveryCRC: 0, exchangeRate: 1 };
+    }
+
+    return {
+      miami: { sinPermiso: val(0) || defaults.miami.sinPermiso, conPermiso: val(1) || defaults.miami.conPermiso },
+      colombia: { sinPermiso: val(4) || defaults.colombia.sinPermiso, conPermiso: val(5) || defaults.colombia.conPermiso },
+      espana: { sinPermiso: val(8) || defaults.espana.sinPermiso, conPermiso: val(9) || defaults.espana.conPermiso },
+      china: { tarifa: val(11) || defaults.china.tarifa },
+      mexico: { tarifa: val(13) || defaults.mexico.tarifa },
+      j: jVals
+    };
+  } catch (err) {
+    console.error('leerTarifas - error leyendo Tarifa!B2:B15:', err && err.message);
+    // devolver defaults para no bloquear el flujo
+    return defaults;
+  }
+}
 // ---------------- GUARDAR EN HISTORIAL ----------------
 async function guardarEnHistorial(data) {
   const sheets = await getGoogleSheetsClient();
@@ -805,29 +830,10 @@ async function guardarEnHistorial(data) {
   await sheets.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_ID, range: 'Historial!A:Z', valueInputOption: 'RAW', resource: { values } });
 }
 
-// ---------------- GUARDAR COTIZACION EN SHEET "Cotizaciones" Y ENVIAR AL ADMIN ----------------
-/*
-A..Q columns mapping:
-A Fecha Cot
-B Cliente
-C Origen
-D Peso
-E Unidad
-F Tipo Permiso
-G Mercancía
-H Sub Total (colones)
-I Descuento (colones)
-J Total (colones)
-K Costo Entrega (colones)
-L Total con Entrega (colones)
-M Tipo de Cambio
-N (vacío)
-O ID de cotización
-P Número Contacto
-Q Correo
-*/
+// ---------------- GUARDAR COTIZACION EN SHEET "Cotizaciones" Y NOTIFICAR ADMIN ----------------
 async function saveCotizacionToSheetAndNotifyAdmin(payload) {
   const sheets = await getGoogleSheetsClient();
+  // construir fila con 17 columnas A..Q
   const row = new Array(17).fill('');
   row[0] = payload.fechaLocal || '';
   row[1] = payload.cliente || '';
@@ -847,14 +853,20 @@ async function saveCotizacionToSheetAndNotifyAdmin(payload) {
   row[15] = payload.contacto || ''; // P
   row[16] = payload.email || ''; // Q
 
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: 'Cotizaciones!A:Q',
-    valueInputOption: 'RAW',
-    resource: { values: [row] }
-  });
+  try {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Cotizaciones!A:Q',
+      valueInputOption: 'RAW',
+      resource: { values: [row] }
+    });
+  } catch (err) {
+    console.error('saveCotizacionToSheetAndNotifyAdmin - Error guardando en Cotizaciones:', err && err.message);
+    // lanzamos error para que el flujo superior lo capture y notifique al usuario
+    throw new Error('No se pudo guardar la cotización (Sheets).');
+  }
 
-  // mensaje legible para admin
+  // preparar mensaje para admin
   const adminMsg = [
     `📣 Nueva cotización (respaldo)`,
     `ID: ${payload.id}`,
@@ -866,7 +878,7 @@ async function saveCotizacionToSheetAndNotifyAdmin(payload) {
     `Tipo: ${payload.tipoPermiso}`,
     `Mercancía: ${payload.mercancia}`,
     `Subtotal: ¢${Math.round(payload.subtotalCRC)}`,
-    `Descuento: ¢${Math.round(payload.discountAmountCRC)} (${(payload.discountPercent*100).toFixed(1)}%)`,
+    `Descuento: ¢${Math.round(payload.discountAmountCRC)} (${((payload.discountPercent||0)*100).toFixed(1)}%)`,
     `Costo entrega: ¢${Math.round(payload.deliveryCostCRC)}`,
     `Total (con entrega): ¢${Math.round(payload.totalWithDeliveryCRC)}`,
     `Tipo de cambio usado: ${payload.exchangeRate}`,
@@ -874,7 +886,10 @@ async function saveCotizacionToSheetAndNotifyAdmin(payload) {
     `Email: ${payload.email || '-'}`
   ].join('\n');
 
-  await bot.sendMessage(ADMIN_TELEGRAM_ID, adminMsg);
+  // Notificar admin: lanzar en background para no bloquear al cliente
+  bot.sendMessage(String(ADMIN_TELEGRAM_ID), adminMsg)
+    .then(()=> { /* ok */ })
+    .catch(e => console.warn('saveCotizacionToSheetAndNotifyAdmin - fallo enviando mensaje al admin:', e && e.message));
 }
 
 // ---------------- DESCUENTO POR PESO ----------------
@@ -887,133 +902,146 @@ function getDiscountPercentByPeso(peso) {
   return 0.00;
 }
 
-// ---------------- CALCULO Y REGISTRO DE COTIZACION (sin email, con guardado en sheet y notificación admin) ----------------
+// ---------------- CÁLCULO Y REGISTRO DE COTIZACIÓN (respaldo) ----------------
 async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
-  // state may contain client info (client), or unregistered fields (nombre, telefono, correo)
-  const tarifas = await leerTarifas();
-  const exchangeRate = tarifas.j.exchangeRate || 1;
-  const deliveryCostCRC = tarifas.j.deliveryCRC || 0;
+  try {
+    // validaciones mínimas
+    if (!state || !state.origen) throw new Error('Falta origen.');
+    if (!state.peso && state.peso !== 0) throw new Error('Falta peso.');
+    const peso = Number(state.peso);
+    if (!Number.isFinite(peso) || peso <= 0) throw new Error('Peso inválido.');
 
-  const origen = state.origen;
-  const peso = state.peso;
-  const unidad = state.unidad;
-  const tipoMercancia = state.tipoMercancia || 'General';
-  const descripcion = state.descripcion || '';
-  const entregaGAM = !!state.entregaGAM;
+    const tarifas = await leerTarifas();
+    const exchangeRate = (tarifas.j && tarifas.j.exchangeRate) ? Number(tarifas.j.exchangeRate) : 1;
+    const deliveryCostCRC = (tarifas.j && tarifas.j.deliveryCRC) ? Number(tarifas.j.deliveryCRC) : 0;
 
-  let tarifaUSD = 0;
-  let pesoFacturable = 0;
-  let unidadFacturable = 'lb';
-  let subtotalUSD = 0;
+    const origen = (state.origen || '').toString();
+    const unidad = state.unidad || 'lb';
+    const tipoMercancia = state.tipoMercancia || 'General';
+    const descripcion = state.descripcion || '';
+    const entregaGAM = !!state.entregaGAM;
 
-  const pesoEnLb = unidad === 'kg' ? peso * 2.20462 : peso;
-  const pesoEnKg = unidad === 'lb' ? peso / 2.20462 : peso;
-  const origenLower = (origen || '').toLowerCase();
+    let tarifaUSD = 0;
+    let pesoFacturable = 0;
+    let unidadFacturable = 'lb';
+    let subtotalUSD = 0;
 
-  if (origenLower === 'colombia') {
-    tarifaUSD = (tipoMercancia === 'Especial' || (state.categoriaSeleccionada || '').toLowerCase().includes('réplica')) ? tarifas.colombia.conPermiso : tarifas.colombia.sinPermiso;
-    pesoFacturable = Math.ceil(pesoEnKg);
-    unidadFacturable = 'kg';
-    subtotalUSD = tarifaUSD * pesoFacturable;
-  } else if (origenLower === 'mexico') {
-    tarifaUSD = tarifas.mexico.tarifa;
-    pesoFacturable = Math.ceil(pesoEnKg);
-    unidadFacturable = 'kg';
-    subtotalUSD = tarifaUSD * pesoFacturable;
-  } else if (origenLower === 'china') {
-    tarifaUSD = tarifas.china.tarifa;
-    pesoFacturable = Math.ceil(pesoEnLb);
-    unidadFacturable = 'lb';
-    subtotalUSD = tarifaUSD * pesoFacturable;
-  } else if (origenLower === 'miami' || origenLower === 'usa') {
-    tarifaUSD = (tipoMercancia === 'Especial') ? tarifas.miami.conPermiso : tarifas.miami.sinPermiso;
-    pesoFacturable = Math.ceil(pesoEnLb);
-    unidadFacturable = 'lb';
-    subtotalUSD = tarifaUSD * pesoFacturable;
-  } else if (origenLower === 'madrid' || origenLower === 'espana') {
-    tarifaUSD = (tipoMercancia === 'Especial') ? tarifas.espana.conPermiso : tarifas.espana.sinPermiso;
-    pesoFacturable = Math.ceil(pesoEnLb);
-    unidadFacturable = 'lb';
-    subtotalUSD = tarifaUSD * pesoFacturable;
-  } else {
-    throw new Error('Origen no soportado');
+    const pesoEnLb = unidad === 'kg' ? peso * 2.20462 : peso;
+    const pesoEnKg = unidad === 'lb' ? peso / 2.20462 : peso;
+    const origenLower = origen.toLowerCase();
+
+    if (origenLower === 'colombia') {
+      tarifaUSD = (tipoMercancia === 'Especial' || (state.categoriaSeleccionada || '').toLowerCase().includes('réplica')) ? tarifas.colombia.conPermiso : tarifas.colombia.sinPermiso;
+      pesoFacturable = Math.ceil(pesoEnKg);
+      unidadFacturable = 'kg';
+      subtotalUSD = tarifaUSD * pesoFacturable;
+    } else if (origenLower === 'mexico') {
+      tarifaUSD = tarifas.mexico.tarifa;
+      pesoFacturable = Math.ceil(pesoEnKg);
+      unidadFacturable = 'kg';
+      subtotalUSD = tarifaUSD * pesoFacturable;
+    } else if (origenLower === 'china') {
+      tarifaUSD = tarifas.china.tarifa;
+      pesoFacturable = Math.ceil(pesoEnLb);
+      unidadFacturable = 'lb';
+      subtotalUSD = tarifaUSD * pesoFacturable;
+    } else if (origenLower === 'miami' || origenLower === 'usa') {
+      tarifaUSD = (tipoMercancia === 'Especial') ? tarifas.miami.conPermiso : tarifas.miami.sinPermiso;
+      pesoFacturable = Math.ceil(pesoEnLb);
+      unidadFacturable = 'lb';
+      subtotalUSD = tarifaUSD * pesoFacturable;
+    } else if (origenLower === 'madrid' || origenLower === 'espana') {
+      tarifaUSD = (tipoMercancia === 'Especial') ? tarifas.espana.conPermiso : tarifas.espana.sinPermiso;
+      pesoFacturable = Math.ceil(pesoEnLb);
+      unidadFacturable = 'lb';
+      subtotalUSD = tarifaUSD * pesoFacturable;
+    } else {
+      throw new Error('Origen no soportado.');
+    }
+
+    // Convertir a colones
+    const subtotalCRC = subtotalUSD * exchangeRate;
+
+    // Descuento por peso
+    const discountPercent = getDiscountPercentByPeso(pesoFacturable);
+    const discountAmountCRC = subtotalCRC * discountPercent;
+    const totalCRC = subtotalCRC - discountAmountCRC;
+
+    // Delivery cost
+    const deliveryCost = entregaGAM ? deliveryCostCRC : 0;
+    const totalWithDeliveryCRC = totalCRC + deliveryCost;
+
+    const id = 'COT-' + Math.random().toString(36).substr(2,9).toUpperCase();
+    const fechaLocal = new Date().toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
+
+    const clienteName = (state.client && state.client.nombre) ? state.client.nombre : (state.nombre || 'Cliente Telegram');
+    const contacto = (state.client && state.client.telefono) ? state.client.telefono : (state.telefono || '');
+    const email = (state.client && state.client.correo) ? state.client.correo : (state.correo || '');
+    // si se requiere distinguir método de envío cuando fuera GAM se puede poner en state.deliveryMethod
+    const metodoEnvioNota = state.deliveryMethod ? `\nMétodo envío: ${state.deliveryMethod}` : '';
+
+    const payload = {
+      id,
+      fechaLocal,
+      cliente: clienteName,
+      origen,
+      peso,
+      unidad,
+      tipoPermiso: tipoMercancia,
+      mercancia: (descripcion || '') + metodoEnvioNota,
+      subtotalCRC,
+      discountPercent,
+      discountAmountCRC,
+      totalCRC,
+      deliveryCostCRC: deliveryCost,
+      totalWithDeliveryCRC,
+      exchangeRate,
+      pesoFacturable,
+      unidadFacturable,
+      contacto,
+      email
+    };
+
+    // Guardar en hoja "Cotizaciones" (si falla lanzará error y será capturado arriba)
+    await saveCotizacionToSheetAndNotifyAdmin(payload);
+
+    // Guardar en Historial (no es crítico si falla; lo intentamos y si falla no bloqueamos la respuesta)
+    guardarEnHistorial({
+      id,
+      fecha: new Date().toISOString(),
+      chatId,
+      email,
+      origen,
+      destino: 'Costa Rica',
+      tipoMercancia,
+      peso,
+      unidad,
+      pesoFacturable,
+      tarifa: tarifaUSD,
+      subtotal: subtotalUSD,
+      discountPercent,
+      discountAmount: discountAmountCRC / (exchangeRate || 1),
+      total: totalCRC / (exchangeRate || 1)
+    }).catch(e => console.warn('calcularYRegistrarCotizacionRespaldo - guardarEnHistorial fallo:', e && e.message));
+
+    return {
+      id,
+      subtotalCRC,
+      discountPercent,
+      discountAmountCRC,
+      totalCRC,
+      deliveryCostCRC: deliveryCost,
+      totalWithDeliveryCRC,
+      exchangeRate,
+      pesoFacturable,
+      unidadFacturable
+    };
+
+  } catch (err) {
+    console.error('calcularYRegistrarCotizacionRespaldo - Error:', err && err.message);
+    // relanzar para que el handler principal lo capture y notifique al usuario
+    throw err;
   }
-
-  // Convertir a colones
-  const subtotalCRC = subtotalUSD * exchangeRate;
-
-  // Descuento por peso
-  const discountPercent = getDiscountPercentByPeso(pesoFacturable);
-  const discountAmountCRC = subtotalCRC * discountPercent;
-  const totalCRC = subtotalCRC - discountAmountCRC;
-
-  // Delivery cost
-  const deliveryCost = entregaGAM ? deliveryCostCRC : 0;
-  const totalWithDeliveryCRC = totalCRC + deliveryCost;
-
-  const id = 'COT-' + Math.random().toString(36).substr(2,9).toUpperCase();
-  const fechaLocal = new Date().toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
-
-  const clienteName = (state.client && state.client.nombre) ? state.client.nombre : (state.nombre || 'Cliente Telegram');
-  const contacto = (state.client && state.client.telefono) ? state.client.telefono : (state.telefono || '');
-  const email = (state.client && state.client.correo) ? state.client.correo : (state.correo || '');
-
-  const payload = {
-    id,
-    fechaLocal,
-    cliente: clienteName,
-    origen,
-    peso,
-    unidad,
-    tipoPermiso: tipoMercancia,
-    mercancia: descripcion + (state.deliveryMethod ? `\nMetodo envio: ${state.deliveryMethod}` : ''),
-    subtotalCRC,
-    discountPercent,
-    discountAmountCRC,
-    totalCRC,
-    deliveryCostCRC: deliveryCost,
-    totalWithDeliveryCRC,
-    exchangeRate,
-    pesoFacturable,
-    unidadFacturable,
-    contacto,
-    email
-  };
-
-  // Save in Cotizaciones sheet and notify admin
-  await saveCotizacionToSheetAndNotifyAdmin(payload);
-
-  // Save in historial (USD approx)
-  await guardarEnHistorial({
-    id,
-    fecha: new Date().toISOString(),
-    chatId,
-    email,
-    origen,
-    destino: 'Costa Rica',
-    tipoMercancia,
-    peso,
-    unidad,
-    pesoFacturable,
-    tarifa: tarifaUSD,
-    subtotal: subtotalUSD,
-    discountPercent,
-    discountAmount: discountAmountCRC / exchangeRate,
-    total: totalCRC / exchangeRate
-  });
-
-  return {
-    id,
-    subtotalCRC,
-    discountPercent,
-    discountAmountCRC,
-    totalCRC,
-    deliveryCostCRC: deliveryCost,
-    totalWithDeliveryCRC,
-    exchangeRate,
-    pesoFacturable,
-    unidadFacturable
-  };
 }
 
 // ---------------- INICIALIZAR SERVIDOR Y WEBHOOK ----------------
