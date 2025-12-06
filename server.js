@@ -277,11 +277,11 @@ async function saveCotizacionToSheetAndNotifyAdmin(payload) {
 }
 
 function getDiscountPercentByPeso(peso) {
-  if (peso >= 75) return 0.15;
-  if (peso >= 50) return 0.12;
-  if (peso >= 35) return 0.10;
-  if (peso >= 25) return 0.07;
-  if (peso >= 15) return 0.05;
+  if (peso >= 75) return 0.13;
+  if (peso >= 50) return 0.10;
+  if (peso >= 35) return 0.07;
+  if (peso >= 25) return 0.05;
+  if (peso >= 15) return 0.03;
   return 0.00;
 }
 
