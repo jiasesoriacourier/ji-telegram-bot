@@ -1,6 +1,6 @@
 // server.js - Bot Telegram + Google Sheets (sin GAS) - J.I Asesoría & Courier
 // Requisitos: npm i express node-telegram-bot-api googleapis body-parser
-// Coloca tu JSON de credenciales en ./credentials/ji-telegram-bot-480321-5c1ec001692b.json
+// Coloca tu JSON de credenciales en ./credentials/ji-telegram-bot-480321-c9ab2aa7ec28.json
 // Set env vars:
 // - TELEGRAM_TOKEN = tu token de Telegram (ej: 8490822681:AA...u5rFrFw)
 // - SPREADSHEET_ID = 10Y0tg1kh6UrVtEzSj_0JGsP7GmydRabM5imlEXTwjLM (ya hay valor por defecto)
@@ -24,10 +24,10 @@ if (!TELEGRAM_TOKEN) {
 }
 
 // Path al JSON de credenciales (subir a ./credentials/)
-const GOOGLE_KEYFILE = path.join(__dirname, 'credentials', 'ji-telegram-bot-480321-5c1ec001692b.json');
+const GOOGLE_KEYFILE = path.join(__dirname, 'credentials', 'ji-telegram-bot-480321-c9ab2aa7ec28.json');
 if (!fs.existsSync(GOOGLE_KEYFILE)) {
   console.error(`ERROR: No se encontró el archivo de credenciales en ${GOOGLE_KEYFILE}`);
-  console.error('Coloca tu JSON en ./credentials/ y asegúrate de llamarlo exactamente ji-telegram-bot-480321-5c1ec001692b.json');
+  console.error('Coloca tu JSON en ./credentials/ y asegúrate de llamarlo exactamente ji-telegram-bot-480321-c9ab2aa7ec28.json');
   process.exit(1);
 }
 
