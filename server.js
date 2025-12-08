@@ -125,8 +125,8 @@ function extractRange(data, startRow, endRow, startCol, endCol) {
 
 /////////////////////// CACHE (CORREGIDO) ///////////////////////
 let cache = {
-  tarifas: {  null, ts: 0 },
-  direcciones: {  null, ts: 0 }
+  tarifas: {data: null, ts: 0 },
+  direcciones: {data: null, ts: 0 }
 };
 const CACHE_TTL = 10 * 60 * 1000;
 
