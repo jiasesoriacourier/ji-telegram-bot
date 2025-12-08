@@ -1,5 +1,6 @@
 // server.js - J.I Asesoría & Courier - Telegram bot (Render-ready)
 // Dependencias: express, node-telegram-bot-api, googleapis
+// Configurar variables de entorno: TELEGRAM_TOKEN, SPREADSHEET_ID, GOOGLE_CREDENTIALS (JSON o base64), ADMIN_TELEGRAM_ID (opcional), RENDER_EXTERNAL_URL (opcional)
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const { google } = require('googleapis');
@@ -10,15 +11,19 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID || '10Y0tg1kh6UrVtEzSj_0JGsP7G
 const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || '7826072133';
 const URL_BASE = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`;
 if (!TELEGRAM_TOKEN) throw new Error('Falta TELEGRAM_TOKEN en variables de entorno');
-if (!process.env.GOOGLE_CREDENTIALS) console.warn('Advertencia: No se encontró GOOGLE_CREDENTIALS en env.');
+if (!process.env.GOOGLE_CREDENTIALS) console.warn('Advertencia: No se encontró GOOGLE_CREDENTIALS en env. Debes definirlo.');
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+// Bot en modo webhook
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
 /////////////////////// ESTADO EN MEMORIA ///////////////////////
+// Map chatId -> state
 const userStates = new Map();
-function setUserState(chatId, state) { userStates.set(String(chatId), { ...state, updatedAt: Date.now() }); }
+function setUserState(chatId, state) {
+  userStates.set(String(chatId), { ...state, updatedAt: Date.now() });
+}
 function getUserState(chatId) {
   const state = userStates.get(String(chatId));
   if (state && Date.now() - state.updatedAt > 24 * 60 * 60 * 1000) {
@@ -27,7 +32,9 @@ function getUserState(chatId) {
   }
   return state || null;
 }
-function clearUserState(chatId) { userStates.delete(String(chatId)); }
+function clearUserState(chatId) {
+  userStates.delete(String(chatId));
+}
 
 /////////////////////// CONSTANTES ///////////////////////
 const MERCANCIA_ESPECIAL = [
@@ -45,22 +52,26 @@ const KNOWN_BRANDS = [
   "nike","adidas","puma","reebok","gucci","louis vuitton","lv","dior","chanel","tiffany","cartier",
   "bulgari","bvlgari","rolex","pandora","piaget","graff","chopard","tous","david yurman","victoria's secret"
 ];
+const VALID_ORIGINS = ['miami','madrid','colombia','mexico','china','estados unidos','espana','españa'];
 
 /////////////////////// CACHÉ ///////////////////////
 let cache = {
   tarifas: {  null, ts: 0 },
   direcciones: {  null, ts: 0 }
 };
-const CACHE_TTL = 10 * 60 * 1000;
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutos
 
 /////////////////////// GOOGLE SHEETS ///////////////////////
 async function getGoogleSheetsClient() {
   let credsRaw = process.env.GOOGLE_CREDENTIALS || '';
-  if (!credsRaw) throw new Error('Falta GOOGLE_CREDENTIALS');
+  if (!credsRaw) throw new Error('Falta GOOGLE_CREDENTIALS en variables de entorno');
   try {
     if (!credsRaw.trim().startsWith('{')) credsRaw = Buffer.from(credsRaw, 'base64').toString('utf8');
     const credentials = JSON.parse(credsRaw);
-    const auth = new google.auth.GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
+    const auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    });
     const client = await auth.getClient();
     return google.sheets({ version: 'v4', auth: client });
   } catch (err) {
@@ -176,21 +187,21 @@ function mainMenuKeyboard() {
 function categoriaInlineKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: 'Electrónicos', callback_ 'CATEGORIA|Electrónicos' }, { text: 'Ropa / Calzado', callback_ 'CATEGORIA|Ropa' }],
-      [{ text: 'Perfumería', callback_ 'CATEGORIA|Perfumería' }, { text: 'Medicinas / Suplementos', callback_ 'CATEGORIA|Medicinas' }],
-      [{ text: 'Alimentos', callback_ 'CATEGORIA|Alimentos' }, { text: 'Cosméticos', callback_ 'CATEGORIA|Cosméticos' }],
-      [{ text: 'Réplicas / Imitaciones', callback_ 'CATEGORIA|Réplicas' }, { text: 'Piezas automotrices', callback_ 'CATEGORIA|Automotriz' }],
-      [{ text: 'Documentos', callback_ 'CATEGORIA|Documentos' }, { text: 'Otro', callback_ 'CATEGORIA|Otro' }]
+      [{ text: 'Electrónicos', callback_data: 'CATEGORIA|Electrónicos' }, { text: 'Ropa / Calzado', callback_data: 'CATEGORIA|Ropa' }],
+      [{ text: 'Perfumería', callback_data: 'CATEGORIA|Perfumería' }, { text: 'Medicinas / Suplementos', callback_data: 'CATEGORIA|Medicinas' }],
+      [{ text: 'Alimentos', callback_data: 'CATEGORIA|Alimentos' }, { text: 'Cosméticos', callback_data: 'CATEGORIA|Cosméticos' }],
+      [{ text: 'Réplicas / Imitaciones', callback_data: 'CATEGORIA|Réplicas' }, { text: 'Piezas automotrices', callback_data: 'CATEGORIA|Automotriz' }],
+      [{ text: 'Documentos', callback_data: 'CATEGORIA|Documentos' }, { text: 'Otro', callback_data: 'CATEGORIA|Otro' }]
     ]
   };
 }
 function casilleroPaisesKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: '🇺🇸 Estados Unidos (Miami)', callback_ 'CASILLERO|miami' }],
-      [{ text: '🇪🇸 España (Madrid)', callback_ 'CASILLERO|madrid' }],
-      [{ text: '🇨🇴 Colombia', callback_ 'CASILLERO|colombia' }],
-      [{ text: '🇲🇽 México', callback_ 'CASILLERO|mexico' }],
+      [{ text: '🇺🇸 Estados Unidos (Miami)', callback_data: 'CASILLERO|miami' }],
+      [{ text: '🇪🇸 España (Madrid)', callback_data: 'CASILLERO|madrid' }],
+      [{ text: '🇨🇴 Colombia', callback_data: 'CASILLERO|colombia' }],
+      [{ text: '🇲🇽 México', callback_data: 'CASILLERO|mexico' }],
       [{ text: '🇨🇳 China', callback_data: 'CASILLERO|china' }]
     ]
   };
@@ -198,18 +209,30 @@ function casilleroPaisesKeyboard() {
 function tipoEmpresaKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: 'Ferretería', callback_ 'TIPO_EMP|Ferretería' }, { text: 'Farmacia', callback_ 'TIPO_EMP|Farmacia' }],
-      [{ text: 'Supermercado', callback_ 'TIPO_EMP|Supermercado' }, { text: 'Pulpería', callback_ 'TIPO_EMP|Pulpería' }],
-      [{ text: 'Asociación Solidarista', callback_ 'TIPO_EMP|Asociación Solidarista' }, { text: 'Constructora', callback_ 'TIPO_EMP|Constructora' }],
-      [{ text: 'Otro', callback_ 'TIPO_EMP|Otro' }]
+      [{ text: 'Ferretería', callback_data: 'TIPO_EMP|Ferretería' }, { text: 'Farmacia', callback_data: 'TIPO_EMP|Farmacia' }],
+      [{ text: 'Supermercado', callback_data: 'TIPO_EMP|Supermercado' }, { text: 'Pulpería', callback_data: 'TIPO_EMP|Pulpería' }],
+      [{ text: 'Asociación Solidarista', callback_data: 'TIPO_EMP|Asociación Solidarista' }, { text: 'Constructora', callback_data: 'TIPO_EMP|Constructora' }],
+      [{ text: 'Otro', callback_data: 'TIPO_EMP|Otro' }]
     ]
   };
 }
 function siNoReutilizarPhoneKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: '✅ Sí, usar el mismo', callback_ 'REUSE_PHONE|si' }, { text: '✏️ Cambiar número', callback_ 'REUSE_PHONE|no' }]
+      [{ text: '✅ Sí, usar el mismo', callback_data: 'REUSE_PHONE|si' }, { text: '✏️ Cambiar número', callback_data: 'REUSE_PHONE|no' }]
     ]
+  };
+}
+function siNoInlineKeyboard() {
+  return { inline_keyboard: [[{ text: 'SI', callback_data: 'GAM|si' }, { text: 'NO', callback_data: 'GAM|no' }]] };
+}
+function origenKeyboardForPrealert() {
+  return {
+    keyboard: [
+      ['Estados Unidos','Colombia','España'],
+      ['China','Mexico','Cancelar']
+    ],
+    resize_keyboard: true, one_time_keyboard: true
   };
 }
 
@@ -297,7 +320,7 @@ async function getEmpresaById(id) {
   return null;
 }
 
-/////////////////////// NOMBRE PARA DIRECCIÓN (modo empresarial) ///////////////////////
+/////////////////////// NOMBRE PARA DIRECCIÓN ///////////////////////
 async function getNombreParaDireccion(cliente) {
   if (!cliente.empresaId) {
     return cliente.nombre;
@@ -307,11 +330,7 @@ async function getNombreParaDireccion(cliente) {
   return `JICO-${abrev}-${cliente.nombre}`;
 }
 
-/////////////////////// FUNCIONES EXISTENTES (TRACKINGS, TARIFAS, etc.) ///////////////////////
-// (Las funciones getTrackingsByName, savePrealertToDatos, leerTarifas, getDiscountPercentByPesoFromArr,
-// saveCotizacionToSheetAndNotifyAdmin, guardarEnHistorial, calcularYRegistrarCotizacionRespaldo, sendTrackingList)
-// se mantienen igual que en tu archivo original. Por brevedad, se omiten aquí, pero están integradas en el flujo.
-
+/////////////////////// FUNCIONES EXISTENTES (igual que en tu archivo) ///////////////////////
 async function getTrackingsByName(nombre) {
   const sheets = await getGoogleSheetsClient();
   const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Datos!A:F' });
@@ -526,11 +545,11 @@ async function sendTrackingList(chatId, items, page = 1) {
   const start = (page - 1) * TRACKS_PER_PAGE;
   const slice = items.slice(start, start + TRACKS_PER_PAGE);
   const lines = slice.map((it, idx) => `${start + idx + 1}. ${it.tracking || '(sin tracking)'} — ${it.origen || '-'} — ${it.estado || '-'} — ${it.peso || '-'}`).join('\n');
-  const inline = slice.map((it, idx) => [{ text: `Ver ${start+idx+1}`, callback_ `TRACK_DETAIL|${start+idx}` }]);
+  const inline = slice.map((it, idx) => [{ text: `Ver ${start+idx+1}`, callback_data: `TRACK_DETAIL|${start+idx}` }]);
   const paging = [];
-  if (page > 1) paging.push({ text: '◀️ Anterior', callback_ `TRACK_PAGE|${page-1}` });
-  if (page < totalPages) paging.push({ text: 'Siguiente ▶️', callback_ `TRACK_PAGE|${page+1}` });
-  if (items.length > 20) paging.push({ text: 'Exportar (respaldo)', callback_ `TRACK_EXPORT|all` });
+  if (page > 1) paging.push({ text: '◀️ Anterior', callback_data: `TRACK_PAGE|${page-1}` });
+  if (page < totalPages) paging.push({ text: 'Siguiente ▶️', callback_data: `TRACK_PAGE|${page+1}` });
+  if (items.length > 20) paging.push({ text: 'Exportar (respaldo)', callback_data: `TRACK_EXPORT|all` });
   await bot.sendMessage(chatId, `📦 Paquetes (${items.length}) — Página ${page}/${totalPages}\n${lines}`, {
     reply_markup: { inline_keyboard: inline.concat([paging]) }
   });
@@ -670,8 +689,8 @@ bot.on('callback_query', async (query) => {
     if (data.startsWith('REUSE_PHONE|')) {
       const val = data.split('|')[1];
       const st = getUserState(chatId) || {};
+      const lastPhone = st.lastPhone;
       if (val === 'si') {
-        const lastPhone = st.lastPhone;
         if (st.lastCommand === '/mi_casillero') handlePhoneForCasillero(chatId, lastPhone);
         else if (st.lastCommand === '/cotizar') handlePhoneForCotizar(chatId, lastPhone);
         else if (st.lastCommand === '/saldo') handlePhoneForSaldo(chatId, lastPhone);
@@ -683,12 +702,12 @@ bot.on('callback_query', async (query) => {
           setUserState(chatId, st);
           bot.sendMessage(chatId, 'Ingresa el nuevo número de teléfono corporativo (ej: 88885555):');
         } else {
-          bot.sendMessage(chatId, 'Ingresa tu nuevo número de teléfono (ej: 88885555):');
           if (st.lastCommand === '/mi_casillero') st.modo = 'MI_CASILLERO_PHONE';
           else if (st.lastCommand === '/cotizar') st.modo = 'COTIZAR_START';
           else if (st.lastCommand === '/saldo') st.modo = 'CHECK_SALDO_PHONE';
           else if (st.lastCommand === '/consultar_tracking') st.modo = 'CHECK_CASILLERO_PHONE';
           setUserState(chatId, st);
+          bot.sendMessage(chatId, 'Ingresa tu nuevo número de teléfono (ej: 88885555):');
         }
       }
       return;
@@ -917,9 +936,9 @@ bot.on('message', async (msg) => {
         contacto: state.contactoPrincipal,
         abrev
       });
-      await bot.sendMessage(ADMIN_TELEGRAM_ID, `🏢 Nueva empresa: ${state.nombreEmpresa} - ${state.telefonoEmpresa}`);
+      await bot.sendMessage(ADMIN_TELEGRAM_ID, `🏢 Nueva empresa registrada:\n${state.nombreEmpresa}\nTipo: ${state.tipoEmpresa}\nContacto: ${state.contactoPrincipal}\nTel: ${state.telefonoEmpresa}`);
       clearUserState(chatId);
-      bot.sendMessage(chatId, `✅ Empresa registrada. Ahora puedes registrar colaboradores con /registrar_colaborador.`);
+      bot.sendMessage(chatId, `✅ Empresa registrada exitosamente.\nAhora puedes registrar colaboradores con /registrar_colaborador.`);
       replyBackToMenu(chatId);
       return;
     }
@@ -951,15 +970,12 @@ bot.on('message', async (msg) => {
         empresaId: state.empresa.rowIndex
       });
       clearUserState(chatId);
-      bot.sendMessage(chatId, `✅ Colaborador *${state.colabNombre}* registrado bajo *${state.empresa.nombre}*.`);
+      bot.sendMessage(chatId, `✅ Colaborador *${state.colabNombre}* registrado bajo la empresa *${state.empresa.nombre}*.`);
       replyBackToMenu(chatId);
       return;
     }
 
-    // FLUJOS EXISTENTES (crear, cotizar, prealertar, saldo, tracking)
-    // (Se mantienen igual que en tu archivo, pero ahora usan classifyProduct y no se congelan)
-
-    // CREAR CASILLERO
+    // FLUJOS EXISTENTES
     if (state.modo === 'CREAR_NOMBRE') {
       const words = text.split(/\s+/).filter(Boolean);
       if (words.length < 3) return bot.sendMessage(chatId, 'Por favor ingresa *Nombre completo* con al menos 1 nombre y 2 apellidos.', { parse_mode: 'Markdown' });
@@ -979,7 +995,7 @@ bot.on('message', async (msg) => {
     }
     if (state.modo === 'CREAR_TELEFONO') {
       const phone = normalizePhone(text);
-      if (!phone || phone.length < 7) return bot.sendMessage(chatId, 'Número inválido. Intenta con 7 u 8 dígitos locales (ej: 88885555).');
+      if (!phone || phone.length < 7) return bot.sendMessage(chatId, 'Número inválido. Intenta con 7 u 8 dígitos.');
       const existing = await findClientByPhone(phone);
       if (existing) {
         clearUserState(chatId);
@@ -1003,7 +1019,6 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // CHECK CASILLERO (tracking)
     if (state.modo === 'CHECK_CASILLERO_PHONE') {
       const phone = normalizePhone(text);
       const client = await findClientByPhone(phone);
@@ -1015,7 +1030,6 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // CHECK SALDO
     if (state.modo === 'CHECK_SALDO_PHONE') {
       const phone = normalizePhone(text);
       const client = await findClientByPhone(phone);
@@ -1025,7 +1039,6 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // PREALERTA
     if (state.modo === 'PREALERT_NUM') {
       state.prealertTracking = text;
       state.modo = 'PREALERT_IDENT';
@@ -1089,7 +1102,6 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // COTIZAR
     if (state.modo === 'COTIZAR_START') {
       const ident = text.toLowerCase();
       if (ident === 'no') {
