@@ -173,22 +173,22 @@ function mainMenuKeyboard() {
 function categoriaInlineKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: 'Electrónicos', callback_ 'CATEGORIA|Electrónicos' }, { text: 'Ropa / Calzado', callback_ 'CATEGORIA|Ropa' }],
-      [{ text: 'Perfumería', callback_ 'CATEGORIA|Perfumería' }, { text: 'Medicinas / Suplementos', callback_ 'CATEGORIA|Medicinas' }],
-      [{ text: 'Alimentos', callback_ 'CATEGORIA|Alimentos' }, { text: 'Cosméticos', callback_ 'CATEGORIA|Cosméticos' }],
-      [{ text: 'Réplicas / Imitaciones', callback_ 'CATEGORIA|Réplicas' }, { text: 'Piezas automotrices', callback_ 'CATEGORIA|Automotriz' }],
-      [{ text: 'Documentos', callback_ 'CATEGORIA|Documentos' }, { text: 'Otro', callback_ 'CATEGORIA|Otro' }]
+      [{ text: 'Electrónicos', callback_data: 'CATEGORIA|Electrónicos' }, { text: 'Ropa / Calzado', callback_data: 'CATEGORIA|Ropa' }],
+      [{ text: 'Perfumería', callback_data: 'CATEGORIA|Perfumería' }, { text: 'Medicinas / Suplementos', callback_data: 'CATEGORIA|Medicinas' }],
+      [{ text: 'Alimentos', callback_data: 'CATEGORIA|Alimentos' }, { text: 'Cosméticos', callback_data: 'CATEGORIA|Cosméticos' }],
+      [{ text: 'Réplicas / Imitaciones', callback_data: 'CATEGORIA|Réplicas' }, { text: 'Piezas automotrices', callback_data: 'CATEGORIA|Automotriz' }],
+      [{ text: 'Documentos', callback_data: 'CATEGORIA|Documentos' }, { text: 'Otro', callback_data: 'CATEGORIA|Otro' }]
     ]
   };
 }
 function casilleroPaisesKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: '🇺🇸 Estados Unidos (Miami)', callback_ 'CASILLERO|miami' }],
-      [{ text: '🇪🇸 España (Madrid)', callback_ 'CASILLERO|madrid' }],
-      [{ text: '🇨🇴 Colombia', callback_ 'CASILLERO|colombia' }],
-      [{ text: '🇲🇽 México', callback_ 'CASILLERO|mexico' }],
-      [{ text: '🇨🇳 China', callback_ 'CASILLERO|china' }]
+      [{ text: '🇺🇸 Estados Unidos (Miami)', callback_data: 'CASILLERO|miami' }],
+      [{ text: '🇪🇸 España (Madrid)', callback_data: 'CASILLERO|madrid' }],
+      [{ text: '🇨🇴 Colombia', callback_data: 'CASILLERO|colombia' }],
+      [{ text: '🇲🇽 México', callback_data: 'CASILLERO|mexico' }],
+      [{ text: '🇨🇳 China', callback_data: 'CASILLERO|china' }]
     ]
   };
 }
@@ -202,7 +202,7 @@ function origenKeyboardForPrealert() {
   };
 }
 function siNoInlineKeyboard() {
-  return { inline_keyboard: [[{ text: 'SI', callback_ 'GAM|si' }, { text: 'NO', callback_ 'GAM|no' }]] };
+  return { inline_keyboard: [[{ text: 'SI', callback_data: 'GAM|si' }, { text: 'NO', callback_data: 'GAM|no' }]] };
 }
 
 /////////////////////// CLIENTES ///////////////////////
@@ -515,7 +515,7 @@ bot.onText(/\/cotizar/, (msg) => {
 });
 
 /////////////////////// CALLBACKS ///////////////////////
-bot.on('callback_query', async (query) => {
+bot.on('callback_data:query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data || '';
   await bot.answerCallbackQuery(query.id).catch(()=>{});
@@ -616,7 +616,7 @@ bot.on('callback_query', async (query) => {
       return bot.sendMessage(chatId, 'Listado enviado como respaldo al administrador.');
     }
   } catch (err) {
-    console.error('Error en callback_query:', err);
+    console.error('Error en callback_data:query:', err);
     bot.sendMessage(chatId, 'Ocurrió un error al procesar la opción.');
   }
 });
@@ -905,11 +905,11 @@ async function sendTrackingList(chatId, items, page = 1) {
   const start = (page - 1) * TRACKS_PER_PAGE;
   const slice = items.slice(start, start + TRACKS_PER_PAGE);
   const lines = slice.map((it, idx) => `${start + idx + 1}. ${it.tracking || '(sin tracking)'} — ${it.origen || '-'} — ${it.estado || '-'} — ${it.peso || '-'}`).join('\n');
-  const inline = slice.map((it, idx) => [{ text: `Ver ${start+idx+1}`, callback_ `TRACK_DETAIL|${start+idx}` }]);
+  const inline = slice.map((it, idx) => [{ text: `Ver ${start+idx+1}`, callback_data: `TRACK_DETAIL|${start+idx}` }]);
   const paging = [];
-  if (page > 1) paging.push({ text: '◀️ Anterior', callback_ `TRACK_PAGE|${page-1}` });
-  if (page < totalPages) paging.push({ text: 'Siguiente ▶️', callback_ `TRACK_PAGE|${page+1}` });
-  if (items.length > 20) paging.push({ text: 'Exportar (respaldo)', callback_ `TRACK_EXPORT|all` });
+  if (page > 1) paging.push({ text: '◀️ Anterior', callback_data: `TRACK_PAGE|${page-1}` });
+  if (page < totalPages) paging.push({ text: 'Siguiente ▶️', callback_data: `TRACK_PAGE|${page+1}` });
+  if (items.length > 20) paging.push({ text: 'Exportar (respaldo)', callback_data: `TRACK_EXPORT|all` });
   await bot.sendMessage(chatId, `📦 Paquetes (${items.length}) — Página ${page}/${totalPages}\n${lines}`, {
     reply_markup: { inline_keyboard: inline.concat([paging]) }
   });
