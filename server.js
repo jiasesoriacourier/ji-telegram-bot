@@ -360,7 +360,7 @@ const categoryKeywords = {
   'Cremas / Cosméticos': ['maquillaje','makeup','cosméticos','cosmeticos','cremas','crema','crema facial','labial','lipstick','base','bb cream','cc cream','sombra','mascara','serum'],
   'Medicamentos': ['ibuprofeno','paracetamol','acetaminofén','naproxeno','omeprazol','amoxicilina','loratadina','jarabe','antihistamínico','antibiotico'],
   'Suplementos / Vitaminas': ['suplementos','vitaminas','proteina','whey','creatina','bcca','colageno','omega'],
-  'Alimentos / Procesados': ['snack','snacks','papas','chips','galleta','galletas','chocolate','dulce','caramelo','granola','cereal','café','te','mantequilla de mani','peanut butter','enlatado','atun','sardinas','pastas'],
+  'Alimentos / Procesados': ['Comida','snack','snacks','papas','chips','galleta','galletas','chocolate','dulce','caramelo','granola','cereal','café','te','mantequilla de mani','peanut butter','enlatado','atun','sardinas','pastas'],
   'Semillas': ['semilla','semillas','chia','linaza','girasol','maiz','maíz','frijol'],
   'Agroquímicos / Fertilizantes': ['fertilizante','pesticida','pesticidas','herbicida','insecticida','glifosato','abono','npk','urea'],
   'Lentes / Líquidos': ['lentes de contacto','lentes','contact lenses','solución para lentes','acuvue','air optix','freshlook'],
