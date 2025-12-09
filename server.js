@@ -515,7 +515,7 @@ bot.onText(/\/cotizar/, (msg) => {
 });
 
 /////////////////////// CALLBACKS ///////////////////////
-bot.on('callback_data:query', async (query) => {
+bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data || '';
   await bot.answerCallbackQuery(query.id).catch(()=>{});
@@ -616,7 +616,7 @@ bot.on('callback_data:query', async (query) => {
       return bot.sendMessage(chatId, 'Listado enviado como respaldo al administrador.');
     }
   } catch (err) {
-    console.error('Error en callback_data:query:', err);
+    console.error('Error en callback_query:', err);
     bot.sendMessage(chatId, 'Ocurrió un error al procesar la opción.');
   }
 });
