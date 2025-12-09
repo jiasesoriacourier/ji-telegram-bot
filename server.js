@@ -25,6 +25,26 @@ function setUserState(chatId, state) { userStates.set(String(chatId), state); }
 function getUserState(chatId) { return userStates.get(String(chatId)) || null; }
 function clearUserState(chatId) { userStates.delete(String(chatId)); }
 
+/////////////////////// CACHE DE TELÉFONO ///////////////////////
+// Guarda phone por usuario temporalmente (1 hora por defecto)
+const userPhoneCache = {}; // chatId -> { phone, ts }
+
+function savePhone(chatId, phone) {
+  try {
+    userPhoneCache[String(chatId)] = { phone: String(phone), ts: Date.now() };
+  } catch (e) {}
+}
+function getCachedPhone(chatId) {
+  const entry = userPhoneCache[String(chatId)];
+  if (!entry) return null;
+  const ONE_HOUR = 60 * 60 * 1000;
+  if ((Date.now() - entry.ts) > ONE_HOUR) {
+    delete userPhoneCache[String(chatId)];
+    return null;
+  }
+  return entry.phone;
+}
+
 /////////////////////// CONSTANTES ///////////////////////
 const MERCANCIA_ESPECIAL = [
   "colonias","perfume","perfumes","cremas","crema","cosmetico","cosmético","cosmeticos","cosméticos","maquillaje",
@@ -123,7 +143,7 @@ function extractRange(data, startRow, endRow, startCol, endCol) {
   return lines.join('\n');
 }
 
-/////////////////////// CACHE (CORREGIDO) ///////////////////////
+/////////////////////// CACHE ///////////////////////
 let cache = {
   tarifas: {data: null, ts: 0 },
   direcciones: {data: null, ts: 0 }
@@ -485,31 +505,73 @@ bot.onText(/\/menu/, (msg) => {
 });
 bot.onText(/\/crear_casillero/, (msg) => {
   const chatId = msg.chat.id;
+  // Crear casillero no pide teléfono inicialmente, comienza con nombre
   setUserState(chatId, { modo: 'CREAR_NOMBRE' });
   bot.sendMessage(chatId, 'Vamos a crear tu casillero. Primero, escribe tu *Nombre completo* (mínimo 1 nombre + 2 apellidos).', { parse_mode: 'Markdown' });
 });
-bot.onText(/\/mi_casillero/, (msg) => {
+bot.onText(/\/mi_casillero/, async (msg) => {
   const chatId = msg.chat.id;
+  // Si hay teléfono cacheado, ofrecer usarlo
+  const cached = getCachedPhone(chatId);
+  if (cached) {
+    setUserState(chatId, { modo: 'AWAIT_USE_CACHED', target: 'MI_CASILLERO' });
+    return bot.sendMessage(chatId, `¿Desea usar el número anterior *${cached}* para consultar su casillero?`, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [[ { text: 'Sí', callback_data: `USE_PHONE|MI_CASILLERO|si` }, { text: 'No', callback_data: `USE_PHONE|MI_CASILLERO|no` } ]] }
+    });
+  }
   setUserState(chatId, { modo: 'MI_CASILLERO_PHONE' });
   bot.sendMessage(chatId, 'Por favor ingresa tu número de teléfono con el que te registraste (ej: 88885555):');
 });
-bot.onText(/\/consultar_tracking/, (msg) => {
+bot.onText(/\/consultar_tracking/, async (msg) => {
   const chatId = msg.chat.id;
+  const cached = getCachedPhone(chatId);
+  if (cached) {
+    setUserState(chatId, { modo: 'AWAIT_USE_CACHED', target: 'CHECK_CASILLERO' });
+    return bot.sendMessage(chatId, `¿Desea usar el número anterior *${cached}* para ver tus paquetes?`, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [[ { text: 'Sí', callback_data: `USE_PHONE|CHECK_CASILLERO|si` }, { text: 'No', callback_data: `USE_PHONE|CHECK_CASILLERO|no` } ]] }
+    });
+  }
   setUserState(chatId, { modo: 'CHECK_CASILLERO_PHONE' });
   bot.sendMessage(chatId, 'Escribe el número de teléfono con el que te registraste para ver tus paquetes (ej: 88885555).');
 });
-bot.onText(/\/saldo/, (msg) => {
+bot.onText(/\/saldo/, async (msg) => {
   const chatId = msg.chat.id;
+  const cached = getCachedPhone(chatId);
+  if (cached) {
+    setUserState(chatId, { modo: 'AWAIT_USE_CACHED', target: 'CHECK_SALDO' });
+    return bot.sendMessage(chatId, `¿Desea usar el número anterior *${cached}* para verificar su saldo?`, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [[ { text: 'Sí', callback_data: `USE_PHONE|CHECK_SALDO|si` }, { text: 'No', callback_data: `USE_PHONE|CHECK_SALDO|no` } ]] }
+    });
+  }
   setUserState(chatId, { modo: 'CHECK_SALDO_PHONE' });
   bot.sendMessage(chatId, 'Por favor escribe el número de teléfono con el que te registraste para verificar tu saldo pendiente (ej: 88885555).');
 });
-bot.onText(/\/prealertar/, (msg) => {
+bot.onText(/\/prealertar/, async (msg) => {
   const chatId = msg.chat.id;
+  const cached = getCachedPhone(chatId);
+  if (cached) {
+    setUserState(chatId, { modo: 'AWAIT_USE_CACHED', target: 'PREALERT' });
+    return bot.sendMessage(chatId, `¿Desea usar el número anterior *${cached}* para esta prealerta?`, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [[ { text: 'Sí', callback_data: `USE_PHONE|PREALERT|si` }, { text: 'No', callback_data: `USE_PHONE|PREALERT|no` } ]] }
+    });
+  }
   setUserState(chatId, { modo: 'PREALERT_NUM' });
   bot.sendMessage(chatId, 'Vamos a prealertar un tracking. Escribe el NÚMERO DE TRACKING:');
 });
-bot.onText(/\/cotizar/, (msg) => {
+bot.onText(/\/cotizar/, async (msg) => {
   const chatId = msg.chat.id;
+  const cached = getCachedPhone(chatId);
+  if (cached) {
+    setUserState(chatId, { modo: 'AWAIT_USE_CACHED', target: 'COTIZAR' });
+    return bot.sendMessage(chatId, `¿Desea usar el número anterior *${cached}* para cotizar?`, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [[ { text: 'Sí', callback_data: `USE_PHONE|COTIZAR|si` }, { text: 'No', callback_data: `USE_PHONE|COTIZAR|no` } ]] }
+    });
+  }
   setUserState(chatId, { modo: 'COTIZAR_START' });
   bot.sendMessage(chatId, 'Ingresa tu número de teléfono (ej: 88885555) o escribe "NO" si no estás registrado.');
 });
@@ -520,6 +582,86 @@ bot.on('callback_query', async (query) => {
   const data = query.data || '';
   await bot.answerCallbackQuery(query.id).catch(()=>{});
   try {
+    // --- Manejo USE_PHONE para reusar número cacheado ---
+    if (data.startsWith('USE_PHONE|')) {
+      const parts = data.split('|');
+      const target = parts[1] || '';
+      const ans = (parts[2] || '').toLowerCase();
+      if (ans === 'si') {
+        const cached = getCachedPhone(chatId);
+        if (!cached) {
+          return bot.sendMessage(chatId, 'No se encontró un número guardado. Por favor ingresa el número ahora.');
+        }
+        // según target, ejecutar el flujo correspondiente
+        if (target === 'MI_CASILLERO') {
+          const client = await findClientByPhone(cached);
+          if (!client) return bot.sendMessage(chatId, 'Número no registrado. Usa /crear_casillero o ingresa otro número.');
+          const state = { client };
+          setUserState(chatId, state);
+          const nombreRegistro = client.nombre;
+          const dire = await getCachedDirecciones(nombreRegistro);
+          return bot.sendMessage(chatId, 'Hola. Selecciona el país de tu casillero:', { reply_markup: casilleroPaisesKeyboard() });
+        }
+        if (target === 'CHECK_CASILLERO') {
+          const client = await findClientByPhone(cached);
+          if (!client) return bot.sendMessage(chatId, 'Número no registrado. Usa /crear_casillero o ingresa otro número.');
+          const items = await getTrackingsByName(client.nombre);
+          if (!items?.length) return bot.sendMessage(chatId, 'No hay paquetes asociados.');
+          setUserState(chatId, { modo: 'TRACKING_LIST', itemsCache: items, page: 1 });
+          return sendTrackingList(chatId, items, 1);
+        }
+        if (target === 'CHECK_SALDO') {
+          const client = await findClientByPhone(cached);
+          if (!client) return bot.sendMessage(chatId, 'Número no registrado. Usa /crear_casillero o ingresa otro número.');
+          clearUserState(chatId);
+          return bot.sendMessage(chatId, `💳 Saldo pendiente: ¢${(client.saldo || 0).toFixed(0)}`);
+        }
+        if (target === 'PREALERT') {
+          // usar número como cliente si existe, o continuar sin registrar
+          const client = await findClientByPhone(cached);
+          const st = getUserState(chatId) || {};
+          st.client = client || null;
+          st.modo = 'PREALERT_NUM';
+          st.prealertTracking = null;
+          setUserState(chatId, st);
+          return bot.sendMessage(chatId, 'Vamos a prealertar un tracking. Escribe el NÚMERO DE TRACKING:');
+        }
+        if (target === 'COTIZAR') {
+          const client = await findClientByPhone(cached);
+          const st = getUserState(chatId) || {};
+          st.client = client || null;
+          st.modo = 'COTIZAR_ORIGEN';
+          setUserState(chatId, st);
+          return bot.sendMessage(chatId, 'Perfecto. ¿Cuál es el ORIGEN?', { reply_markup: { keyboard: [['miami','madrid'],['colombia','mexico'],['china','Cancelar']], resize_keyboard: true, one_time_keyboard: true } });
+        }
+        return bot.sendMessage(chatId, 'Acción no reconocida.');
+      } else {
+        // ans === 'no' -> pedir número nuevo y setear modo apropiado según target
+        if (data.includes('|MI_CASILLERO|')) {
+          setUserState(chatId, { modo: 'MI_CASILLERO_PHONE' });
+          return bot.sendMessage(chatId, 'Por favor ingresa tu número de teléfono con el que te registraste (ej: 88885555):');
+        }
+        if (data.includes('|CHECK_CASILLERO|')) {
+          setUserState(chatId, { modo: 'CHECK_CASILLERO_PHONE' });
+          return bot.sendMessage(chatId, 'Escribe el número de teléfono con el que te registraste para ver tus paquetes (ej: 88885555).');
+        }
+        if (data.includes('|CHECK_SALDO|')) {
+          setUserState(chatId, { modo: 'CHECK_SALDO_PHONE' });
+          return bot.sendMessage(chatId, 'Por favor escribe el número de teléfono con el que te registraste para verificar tu saldo pendiente (ej: 88885555).');
+        }
+        if (data.includes('|PREALERT|')) {
+          setUserState(chatId, { modo: 'PREALERT_IDENT' }); // we expect ident (phone/email) next
+          return bot.sendMessage(chatId, 'Ingresa el número de teléfono o correo con el que deseas registrar este tracking (ej: 88885555) o responde "NO" si no estás registrado.');
+        }
+        if (data.includes('|COTIZAR|')) {
+          setUserState(chatId, { modo: 'COTIZAR_START' });
+          return bot.sendMessage(chatId, 'Ingresa tu número de teléfono (ej: 88885555) o escribe "NO" si no estás registrado.');
+        }
+        return bot.sendMessage(chatId, 'Operación cancelada. Usa /menu para volver al inicio.');
+      }
+    }
+
+    // --- Flujos originales (categoría, casillero, etc.) ---
     if (data.startsWith('CATEGORIA|')) {
       const categoria = data.split('|')[1] || '';
       const state = getUserState(chatId) || {};
@@ -572,7 +714,8 @@ bot.on('callback_query', async (query) => {
             const res = await calcularYRegistrarCotizacionRespaldo(chatId, st);
             clearUserState(chatId);
             const fechaLocal = new Date().toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
-            const msg = `✅ Cotización generada\nID: ${res.id}\nFecha: ${fechaLocal}\nOrigen: ${st.origen}\nPeso facturable: ${res.pesoFacturable} ${res.unidadFacturable}\nSubtotal: ¢${res.subtotalCRC.toFixed(0)}\nDescuento: ¢${res.discountAmountCRC.toFixed(0)} (${(res.discountPercent*100).toFixed(1)}%)\nCosto entrega: ¢${res.deliveryCostCRC.toFixed(0)}\nTotal (con entrega): ¢${res.totalWithDeliveryCRC.toFixed(0)}\n(Tipo de cambio usado: ${res.exchangeRate})`;
+            const nota = "\n\n📝 Nota: Los montos aquí mostrados son aproximados y pueden variar según el tipo de cambio al momento del cobro, el peso final del paquete y la clasificación real de la mercancía.";
+            const msg = `✅ Cotización generada\nID: ${res.id}\nFecha: ${fechaLocal}\nOrigen: ${st.origen}\nPeso facturable: ${res.pesoFacturable} ${res.unidadFacturable}\nSubtotal: ¢${res.subtotalCRC.toFixed(0)}\nDescuento: ¢${res.discountAmountCRC.toFixed(0)} (${(res.discountPercent*100).toFixed(1)}%)\nCosto entrega: ¢${res.deliveryCostCRC.toFixed(0)}\nTotal (con entrega): ¢${res.totalWithDeliveryCRC.toFixed(0)}\n(Tipo de cambio usado: ${res.exchangeRate})${nota}`;
             await bot.sendMessage(chatId, msg);
             replyBackToMenu(chatId);
           } catch (e) {
@@ -615,6 +758,7 @@ bot.on('callback_query', async (query) => {
       await bot.sendMessage(ADMIN_TELEGRAM_ID, txt);
       return bot.sendMessage(chatId, 'Listado enviado como respaldo al administrador.');
     }
+
   } catch (err) {
     console.error('Error en callback_query:', err);
     bot.sendMessage(chatId, 'Ocurrió un error al procesar la opción.');
@@ -624,11 +768,23 @@ bot.on('callback_query', async (query) => {
 /////////////////////// MENSAJES LIBRES ///////////////////////
 bot.on('message', async (msg) => {
   try {
-    if (!msg.text || msg.text.startsWith('/')) return;
+    if (!msg.text) return;
+    // Ignorar comandos aquí; ya los maneja bot.onText
+    if (msg.text.startsWith('/')) return;
+
     const chatId = msg.chat.id;
     const text = msg.text.trim();
     const state = getUserState(chatId) || {};
 
+    // Si NO hay un estado (usuario no está en un flujo), responder mensaje genérico amable
+    if (!state || !state.modo) {
+      return bot.sendMessage(chatId,
+        `¡Hola! 👋\nBienvenido a *J.I Asesoría & Courier*.\n\nPara usar nuestro sistema selecciona una opción del menú o escribe uno de los comandos:\n/prealertar\n/consultar_tracking\n/crear_casillero\n/mi_casillero\n/cotizar\n/saldo\n\nSi necesitas ayuda escribe /ayuda.`,
+        { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard() }
+      );
+    }
+
+    // --- Flujos existentes que dependen de state.modo ---
     // CREAR CASILLERO
     if (state.modo === 'CREAR_NOMBRE') {
       const words = text.split(/\s+/).filter(Boolean);
@@ -656,6 +812,8 @@ bot.on('message', async (msg) => {
         return;
       }
       state.telefono = phone;
+      // Guardar teléfono en cache
+      savePhone(chatId, phone);
       state.modo = 'CREAR_DIRECCION';
       setUserState(chatId, state);
       return bot.sendMessage(chatId, 'Por último, indica tu *dirección de entrega* (calle, número, ciudad).', { parse_mode: 'Markdown' });
@@ -672,6 +830,8 @@ bot.on('message', async (msg) => {
     // MI_CASILLERO_PHONE
     if (state.modo === 'MI_CASILLERO_PHONE') {
       const phone = normalizePhone(text);
+      // guardar en cache
+      savePhone(chatId, phone);
       const client = await findClientByPhone(phone);
       if (!client) return bot.sendMessage(chatId, 'No encontrado. Usa /crear_casillero.');
       state.client = client;
@@ -707,6 +867,9 @@ bot.on('message', async (msg) => {
         return bot.sendMessage(chatId, 'Ingresa tu *Nombre completo* (para registrar la cotización).', { parse_mode: 'Markdown' });
       } else {
         const client = await findClientByPhone(ident);
+        // guardar en cache si se ingresó número
+        const normalized = normalizePhone(ident);
+        if (normalized) savePhone(chatId, normalized);
         if (!client) {
           state.modo = 'COTIZAR_UNREG_PROMPT';
           state.unregCandidatePhone = normalizePhone(ident);
@@ -753,6 +916,8 @@ bot.on('message', async (msg) => {
       const phone = normalizePhone(text);
       if (!phone || phone.length < 7) return bot.sendMessage(chatId, 'Número inválido. Intenta con 7 u 8 dígitos.');
       state.telefono = phone;
+      // guardar en cache
+      savePhone(chatId, phone);
       state.modo = 'COTIZAR_ORIGEN';
       setUserState(chatId, state);
       return bot.sendMessage(chatId, 'Selecciona el ORIGEN:', { reply_markup: { keyboard: [['miami','madrid'],['colombia','mexico'],['china','Cancelar']], resize_keyboard: true, one_time_keyboard: true } });
@@ -800,7 +965,8 @@ bot.on('message', async (msg) => {
           const res = await calcularYRegistrarCotizacionRespaldo(chatId, state);
           clearUserState(chatId);
           const fechaLocal = new Date().toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
-          const msg = `✅ Cotización generada\nID: ${res.id}\nFecha: ${fechaLocal}\nOrigen: ${state.origen}\nPeso facturable: ${res.pesoFacturable} ${res.unidadFacturable}\nSubtotal: ¢${res.subtotalCRC.toFixed(0)}\nDescuento: ¢${res.discountAmountCRC.toFixed(0)} (${(res.discountPercent*100).toFixed(1)}%)\nCosto entrega: ¢${res.deliveryCostCRC.toFixed(0)}\nTotal (con entrega): ¢${res.totalWithDeliveryCRC.toFixed(0)}\n(Tipo de cambio usado: ${res.exchangeRate})`;
+          const nota = "\n\n📝 Nota: Los montos aquí mostrados son aproximados y pueden variar según el tipo de cambio al momento del cobro, el peso final del paquete y la clasificación real de la mercancía.";
+          const msg = `✅ Cotización generada\nID: ${res.id}\nFecha: ${fechaLocal}\nOrigen: ${state.origen}\nPeso facturable: ${res.pesoFacturable} ${res.unidadFacturable}\nSubtotal: ¢${res.subtotalCRC.toFixed(0)}\nDescuento: ¢${res.discountAmountCRC.toFixed(0)} (${(res.discountPercent*100).toFixed(1)}%)\nCosto entrega: ¢${res.deliveryCostCRC.toFixed(0)}\nTotal (con entrega): ¢${res.totalWithDeliveryCRC.toFixed(0)}\n(Tipo de cambio usado: ${res.exchangeRate})${nota}`;
           bot.sendMessage(chatId, msg);
           replyBackToMenu(chatId);
           return;
@@ -813,10 +979,11 @@ bot.on('message', async (msg) => {
       return bot.sendMessage(chatId, 'Selecciona "Encomienda" o "Correos de C.R" (usa el teclado).', { reply_markup: { keyboard: [['Encomienda','Correos de C.R'],['Cancelar']], resize_keyboard: true, one_time_keyboard: true } });
     }
 
-    // Otros flujos (CHECK_SALDO_PHONE, PREALERT, etc.) igual que en tu archivo original
+    // Otros flujos (CHECK_SALDO_PHONE, PREALERT, etc.)
 
     if (state.modo === 'CHECK_CASILLERO_PHONE') {
       const phone = normalizePhone(text);
+      savePhone(chatId, phone);
       const client = await findClientByPhone(phone);
       clearUserState(chatId);
       if (!client) return bot.sendMessage(chatId, 'No encontrado. Usa /crear_casillero.');
@@ -826,6 +993,7 @@ bot.on('message', async (msg) => {
     }
     if (state.modo === 'CHECK_SALDO_PHONE') {
       const phone = normalizePhone(text);
+      savePhone(chatId, phone);
       const client = await findClientByPhone(phone);
       clearUserState(chatId);
       if (!client) return bot.sendMessage(chatId, 'No encontrado. Usa /crear_casillero.');
@@ -852,13 +1020,39 @@ bot.on('message', async (msg) => {
             }
           }
         } else {
+          // es teléfono
+          const phone = normalizePhone(ident);
+          savePhone(chatId, phone);
           client = await findClientByPhone(ident);
         }
+      }
+      if (!client && ident !== 'no') {
+        // preguntar si desea registrarse
+        state.modo = 'PREALERT_UNREG_PROMPT';
+        state.unregCandidatePhone = normalizePhone(ident);
+        setUserState(chatId, state);
+        return bot.sendMessage(chatId, 'Número/correo no registrado. ¿Deseas registrarte? Responde SI o NO.');
       }
       state.client = client || null;
       state.modo = 'PREALERT_ORIG';
       setUserState(chatId, state);
       return bot.sendMessage(chatId, 'Selecciona el ORIGEN del paquete:', { reply_markup: origenKeyboardForPrealert() });
+    }
+    if (state.modo === 'PREALERT_UNREG_PROMPT') {
+      const ans = text.toLowerCase();
+      if (ans === 'si' || ans === 's') {
+        state.modo = 'CREAR_NOMBRE';
+        setUserState(chatId, state);
+        return bot.sendMessage(chatId, 'Vamos a crear tu casillero. Escribe tu *Nombre completo* (mínimo 1 nombre + 2 apellidos).', { parse_mode: 'Markdown' });
+      } else if (ans === 'no' || ans === 'n') {
+        // continuar sin cliente
+        state.client = null;
+        state.modo = 'PREALERT_ORIG';
+        setUserState(chatId, state);
+        return bot.sendMessage(chatId, 'Selecciona el ORIGEN del paquete:', { reply_markup: origenKeyboardForPrealert() });
+      } else {
+        return bot.sendMessage(chatId, 'Responde SI o NO por favor.');
+      }
     }
     if (state.modo === 'PREALERT_ORIG') {
       const chosen = text.toLowerCase();
