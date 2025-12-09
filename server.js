@@ -1,4 +1,4 @@
-// server.js - J.I Asesoría & Courier - Telegram bot (Render-ready)
+// server.js - J.I Asesoría & Courier (reemplazar archivo actual)
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const { google } = require('googleapis');
@@ -8,6 +8,7 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || '';
 const URL_BASE = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`;
 if (!TELEGRAM_TOKEN) throw new Error('Falta TELEGRAM_TOKEN en variables de entorno');
+if (!SPREADSHEET_ID) throw new Error('Falta SPREADSHEET_ID en variables de entorno');
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -19,7 +20,7 @@ function getUserState(chatId) { return userStates.get(String(chatId)) || null; }
 function clearUserState(chatId) { userStates.delete(String(chatId)); }
 
 const userPhoneCache = {};
-function savePhone(chatId, phone) { userPhoneCache[String(chatId)] = { phone: String(phone), ts: Date.now() }; }
+function savePhone(chatId, phone) { try { userPhoneCache[String(chatId)] = { phone: String(phone), ts: Date.now() }; } catch(e){} }
 function getCachedPhone(chatId) {
   const e = userPhoneCache[String(chatId)];
   if (!e) return null;
@@ -28,31 +29,14 @@ function getCachedPhone(chatId) {
   return e.phone;
 }
 
-const MERCANCIA_PROHIBIDA = [
-  "licor","whisky","vodka","ron","alcohol","animal","vivo","piel","droga","drogas","cannabis","cbd",
-  "arma","armas","munición","municiones","explosivo","explosivos","pornograf","falsificado","falso",
-  "oro","plata","dinero","inflamable","corrosivo","radiactivo","gas","batería de litio","bateria de litio","tabaco","cigarro","cigarros"
-];
-
-function classifyProductSimple({ descripcion, categoriaSeleccionada, origen }) {
-  const text = (descripcion || '').toLowerCase();
-  if (MERCANCIA_PROHIBIDA.some(k => text.includes(k))) return { tipo: 'Prohibida' };
-  return { tipo: 'General' };
-}
-
 async function getGoogleSheetsClient() {
   let credsRaw = process.env.GOOGLE_CREDENTIALS || '';
-  if (!credsRaw) throw new Error('Falta GOOGLE_CREDENTIALS en variables de entorno');
-  try {
-    if (!credsRaw.trim().startsWith('{')) credsRaw = Buffer.from(credsRaw, 'base64').toString('utf8');
-    const credentials = JSON.parse(credsRaw);
-    const auth = new google.auth.GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
-    const client = await auth.getClient();
-    return google.sheets({ version: 'v4', auth: client });
-  } catch (err) {
-    console.error('Error parseando GOOGLE_CREDENTIALS:', err);
-    throw err;
-  }
+  if (!credsRaw) throw new Error('Falta GOOGLE_CREDENTIALS en env');
+  if (!credsRaw.trim().startsWith('{')) credsRaw = Buffer.from(credsRaw, 'base64').toString('utf8');
+  const credentials = JSON.parse(credsRaw);
+  const auth = new google.auth.GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
+  const client = await auth.getClient();
+  return google.sheets({ version: 'v4', auth: client });
 }
 
 function normalizePhone(p) {
@@ -61,21 +45,6 @@ function normalizePhone(p) {
   s = s.replace(/\D+/g, '');
   if (s.startsWith('506')) s = s.slice(3);
   return s;
-}
-
-function extractRange(data, startRow, endRow, startCol, endCol) {
-  const lines = [];
-  for (let r = startRow; r <= endRow; r++) {
-    if (r >= data.length) continue;
-    const row = data[r] || [];
-    const cells = [];
-    for (let c = startCol; c <= endCol; c++) {
-      const cell = (row[c] || '').toString().trim();
-      if (cell) cells.push(cell);
-    }
-    if (cells.length > 0) lines.push(cells.join(' '));
-  }
-  return lines.join('\n');
 }
 
 let cache = { tarifas: { data: null, ts: 0 }, direcciones: { data: null, ts: 0 } };
@@ -107,6 +76,20 @@ async function getCachedDirecciones(nombreCliente = 'Nombre de cliente') {
     mexico: replaceName(extractRange(data, 23, 28, 1, 3)),
     china: replaceName(extractRange(data, 23, 28, 6, 9))
   };
+}
+function extractRange(data, startRow, endRow, startCol, endCol) {
+  const lines = [];
+  for (let r = startRow; r <= endRow; r++) {
+    if (r >= data.length) continue;
+    const row = data[r] || [];
+    const cells = [];
+    for (let c = startCol; c <= endCol; c++) {
+      const cell = (row[c] || '').toString().trim();
+      if (cell) cells.push(cell);
+    }
+    if (cells.length > 0) lines.push(cells.join(' '));
+  }
+  return lines.join('\n');
 }
 
 function mainMenuKeyboard() {
@@ -142,25 +125,12 @@ function casilleroPaisesKeyboard() {
     ]
   };
 }
-function origenKeyboardForPrealert() {
-  return {
-    keyboard: [
-      ['Estados Unidos','Colombia','España'],
-      ['China','Mexico','Cancelar']
-    ],
-    resize_keyboard: true, one_time_keyboard: true
-  };
-}
 function siNoInlineKeyboard() {
   return { inline_keyboard: [[{ text: 'SI', callback_data: 'GAM|si' }, { text: 'NO', callback_data: 'GAM|no' }]] };
 }
 function replyBackToMenu(chatId) {
   bot.sendMessage(chatId, '¿Deseas volver al menú principal?', {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: 'Sí', callback_data: 'MENU|SI' }, { text: 'No', callback_data: 'MENU|NO' }]
-      ]
-    }
+    reply_markup: { inline_keyboard: [[ { text: 'Sí', callback_data: 'MENU|SI' }, { text: 'No', callback_data: 'MENU|NO' } ]] }
   });
 }
 
@@ -243,36 +213,61 @@ async function savePrealertToDatos({ tracking, cliente, origen, observaciones, c
 async function leerTarifas() {
   const sheets = await getGoogleSheetsClient();
   const ranges = [
-    'Tarifas!B2','Tarifas!B3','Tarifas!B6','Tarifas!B7','Tarifas!B10','Tarifas!B11','Tarifas!B13','Tarifas!B15',
-    'Tarifas!G4:G8','Tarifas!J1:J3'
+    'Tarifas!B3', // Miami sin permiso
+    'Tarifas!B4', // Miami con permiso
+    'Tarifas!B6', // Colombia sin permiso
+    'Tarifas!B7', // Colombia con permiso
+    'Tarifas!B10',// España sin permiso
+    'Tarifas!B11',// España con permiso
+    'Tarifas!B14',// China tarifa
+    'Tarifas!B15',// México tarifa
+    'Tarifas!G4:G8', // descuentos porcentuales (15-24,25-34,35-49,50-74,75+)
+    'Tarifas!J1:J3'  // entrega y tipo de cambio (J1,J2,J3)
   ];
   const read = await sheets.spreadsheets.values.batchGet({ spreadsheetId: SPREADSHEET_ID, ranges });
   const valueRanges = read.data.valueRanges || [];
+
   const getVal = (i) => {
-    const v = (valueRanges[i] && valueRanges[i].values && valueRanges[i].values[0] && valueRanges[i].values[0][0]) || '0';
-    return parseFloat(String(v).replace(',', '.')) || 0;
+    try {
+      const raw = valueRanges[i] && valueRanges[i].values && valueRanges[i].values[0] && valueRanges[i].values[0][0];
+      if (raw === undefined || raw === null || String(raw).toString().trim() === '') return 0;
+      return parseFloat(String(raw).replace(',', '.')) || 0;
+    } catch (e) { return 0; }
   };
 
-  const miami_sin = getVal(0), miami_con = getVal(1), col_sin = getVal(2), col_con = getVal(3),
-        esp_sin = getVal(4), esp_con = getVal(5), china = getVal(6), mexico = getVal(7);
+  const miami_sin = getVal(0),
+        miami_con = getVal(1),
+        col_sin = getVal(2),
+        col_con = getVal(3),
+        esp_sin = getVal(4),
+        esp_con = getVal(5),
+        china = getVal(6),
+        mexico = getVal(7);
 
   let discountsArrNumbers = [0,0,0,0,0];
   try {
-    const gVals = (valueRanges[8] && valueRanges[8].values) || [];
-    discountsArrNumbers = gVals.map(v => {
-      const n = parseFloat(String(v[0]||'0').replace(',', '.')) || 0;
-      return n; // keep as percentage number (e.g., 5)
-    });
+    const gVals = valueRanges[8] && valueRanges[8].values ? valueRanges[8].values : [];
+    discountsArrNumbers = gVals.map(r => parseFloat((r[0]||'0').toString().replace(',', '.')) || 0);
     while (discountsArrNumbers.length < 5) discountsArrNumbers.push(0);
-  } catch (e) {}
+  } catch (e) { discountsArrNumbers = [0,0,0,0,0]; }
 
   let deliveryCRC = 0, exchangeRate = 1;
   try {
-    const jVals = (valueRanges[9] && valueRanges[9].values) || [];
-    const arr = jVals.map(v => parseFloat(String(v[0]||'0').replace(',', '.')) || 0);
-    deliveryCRC = arr[0] || 0;
-    exchangeRate = arr[2] || 1;
-  } catch (e) {}
+    const jVals = valueRanges[9] && valueRanges[9].values ? valueRanges[9].values : [];
+    // jVals is array of rows (may contain empty rows)
+    // Ensure we pull J1 (row 0), J2 (row1), J3 (row2) safely; if missing, search for numeric fallback
+    deliveryCRC = parseFloat((jVals[0] && jVals[0][0]) ? String(jVals[0][0]).replace(',', '.') : 0) || 0;
+    // Prefer row 2 (index 2) for exchange rate; if not present, find first numeric in jVals
+    exchangeRate = (jVals[2] && jVals[2][0]) ? parseFloat(String(jVals[2][0]).replace(',', '.')) : null;
+    if (!exchangeRate) {
+      for (let r of jVals) {
+        if (r && r[0] && !isNaN(parseFloat(String(r[0]).replace(',', '.')))) {
+          exchangeRate = parseFloat(String(r[0]).replace(',', '.'));
+        }
+      }
+    }
+    exchangeRate = exchangeRate || 1;
+  } catch (e) { deliveryCRC = 0; exchangeRate = 1; }
 
   return {
     miami: { sinPermiso: miami_sin, conPermiso: miami_con },
@@ -352,101 +347,27 @@ async function guardarEnHistorial(data) {
   await sheets.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_ID, range: 'Historial!A:Z', valueInputOption: 'RAW', resource: { values } });
 }
 
-async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
-  const tarifas = await getCachedTarifas();
-  const exchangeRate = tarifas.j.exchangeRate || 1;
-  const deliveryCostCRC = tarifas.j.deliveryCRC || 0;
-  const origen = (state.origen || '').toLowerCase();
-  const peso = parseFloat(state.peso) || 0;
-  const unidad = state.unidad || 'lb';
-  const tipoMercancia = state.tipoMercancia || 'General';
-  const descripcion = state.descripcion || '';
-  const entregaGAM = !!state.entregaGAM;
-  const pesoEnLb = unidad === 'kg' ? peso * 2.20462 : peso;
-  const pesoEnKg = unidad === 'lb' ? peso / 2.20462 : peso;
-
-  let tarifaUSD = 0, pesoFacturable = 0, unidadFacturable = 'lb', subtotalUSD = 0;
-
-  if (['colombia','col'].includes(origen)) {
-    tarifaUSD = (tipoMercancia === 'Especial' || (state.categoriaFinal || '').toLowerCase().includes('réplica')) ? tarifas.colombia.conPermiso : tarifas.colombia.sinPermiso;
-    pesoFacturable = Math.ceil(pesoEnKg);
-    unidadFacturable = 'kg';
-    subtotalUSD = tarifaUSD * pesoFacturable;
-  } else if (origen.includes('mexico')) {
-    tarifaUSD = tarifas.mexico.tarifa;
-    pesoFacturable = Math.ceil(pesoEnKg);
-    unidadFacturable = 'kg';
-    subtotalUSD = tarifaUSD * pesoFacturable;
-  } else if (origen.includes('china')) {
-    tarifaUSD = tarifas.china.tarifa;
-    pesoFacturable = Math.ceil(pesoEnLb);
-    unidadFacturable = 'lb';
-    subtotalUSD = tarifaUSD * pesoFacturable;
-  } else if (['miami','estados unidos','usa'].some(k => origen.includes(k))) {
-    tarifaUSD = (tipoMercancia === 'Especial') ? tarifas.miami.conPermiso : tarifas.miami.sinPermiso;
-    pesoFacturable = Math.ceil(pesoEnLb);
-    unidadFacturable = 'lb';
-    subtotalUSD = tarifaUSD * pesoFacturable;
-  } else if (origen.includes('madrid') || origen.includes('espana') || origen.includes('españa')) {
-    tarifaUSD = (tipoMercancia === 'Especial') ? tarifas.espana.conPermiso : tarifas.espana.sinPermiso;
-    pesoFacturable = Math.ceil(pesoEnLb);
-    unidadFacturable = 'lb';
-    subtotalUSD = tarifaUSD * pesoFacturable;
-  } else {
-    throw new Error('Origen no soportado');
-  }
-
-  const subtotalCRC = subtotalUSD * exchangeRate;
-  const discountPercent = getDiscountPercentByPesoFromArr(pesoFacturable, tarifas.discounts || []);
-  const discountAmountCRC = subtotalCRC * discountPercent;
-  const totalCRC = subtotalCRC - discountAmountCRC;
-  const deliveryCost = entregaGAM ? deliveryCostCRC : 0;
-  const totalWithDeliveryCRC = totalCRC + deliveryCost;
-  const id = 'COT-' + Math.random().toString(36).substr(2,9).toUpperCase();
-  const fechaLocal = new Date().toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
-  const clienteName = (state.client && state.client.nombre) ? state.client.nombre : (state.nombre || 'Cliente Telegram');
-  const contacto = (state.client && state.client.telefono) ? state.client.telefono : (state.telefono || '');
-  const email = (state.client && state.client.correo) ? state.client.correo : (state.correo || '');
-
-  const payload = {
-    id, fechaLocal, cliente: clienteName, origen, peso, unidad, tipoPermiso: tipoMercancia,
-    mercancia: descripcion + (state.deliveryMethod ? `\nMétodo envío: ${state.deliveryMethod}` : ''),
-    subtotalCRC, discountPercent, discountAmountCRC, totalCRC, deliveryCostCRC: deliveryCost,
-    totalWithDeliveryCRC, exchangeRate, pesoFacturable, unidadFacturable, contacto, email
-  };
-
-  await saveCotizacionToSheetAndNotifyAdmin(payload);
-  await guardarEnHistorial({
-    id, chatId, email, origen, tipoMercancia, peso, unidad, pesoFacturable, tarifa: tarifaUSD,
-    subtotal: subtotalUSD, discountPercent, discountAmount: discountAmountCRC / exchangeRate, total: totalCRC / exchangeRate
-  });
-
-  return {
-    id, subtotalCRC, discountPercent, discountAmountCRC, totalCRC,
-    deliveryCostCRC: deliveryCost, totalWithDeliveryCRC, exchangeRate, pesoFacturable, unidadFacturable
-  };
-}
-
 const categoryKeywords = {
-  'Perfumes': ['perfume','perfumes','colonia','colonias','fragancia','fragancias','eau de parfum','edp','eau de toilette','edt','dior','chanel','miss dior','bleu de chanel','paco rabanne','gucci','armani','versace','tommy hilfiger','victoria\'s secret','bath & body','fragancia original','perfume replica','perfume fake','travel size','mini perfume','attar'],
-  'Cosméticos': ['maquillaje','makeup','cosméticos','cosmeticos','cremas','crema','crema facial','crema corporal','labial','lipstick','base','bb cream','cc cream','sombra','mascara','rimel','iluminador','serum','tónicos','tonico','agua micelar','desmaquillante','ceraVe','neutrogena','loreal','estee lauder'],
-  'Medicamentos': ['ibuprofeno','paracetamol','acetaminofén','acetamino','naproxeno','omeprazol','amoxicilina','loratadina','jarabe','antihistamínico','vitamina','vitaminas','antibiótico','antibiotico','gotas','pomada'],
-  'Suplementos': ['suplementos','vitaminas','proteina','whey','creatina','creatine','pre entrenamiento','pre workout','bcca','colageno','omega','proteína','barras proteicas','gainers'],
+  'Perfumes': ['perfume','perfumes','colonia','colonias','fragancia','fragancias','eau de parfum','edp','eau de toilette','edt','dior','chanel','miss dior','bleu de chanel','paco rabanne','gucci','armani','versace','tommy hilfiger','victoria\'s secret'],
+  'Cosméticos': ['maquillaje','makeup','cosméticos','cosmeticos','cremas','crema','crema facial','labial','lipstick','base','bb cream','cc cream','sombra','mascara','rimel','iluminador','serum'],
+  'Medicamentos': ['ibuprofeno','paracetamol','acetaminofén','naproxeno','omeprazol','amoxicilina','loratadina','jarabe','antihistamínico','vitamina','vitaminas','antibiótico'],
+  'Suplementos': ['suplementos','vitaminas','proteina','whey','creatina','bcca','colageno','omega'],
   'Alimentos': ['snack','snacks','papas','chips','galleta','galletas','chocolate','dulce','caramelo','granola','cereal','café','te','mantequilla de maní','peanut butter','salsa','enlatado','atun','sardinas','pastas'],
-  'Semillas': ['semilla','semillas','chia','linaza','girasol','maiz','maíz','frijol','tomate semilla','pepino semilla'],
+  'Semillas': ['semilla','semillas','chia','linaza','girasol','maiz','maíz','frijol'],
   'Agroquímicos': ['fertilizante','pesticida','pesticidas','herbicida','insecticida','glifosato','abono','npk','urea'],
-  'Lentes': ['lentes de contacto','lentes','contact lenses','solución para lentes','acuvue','air optix','freshlook'],
-  'Quimicos': ['alcohol isopropilico','alcohol isopropílico','acetona','reactivo','reactivos','ácido','acido','buffer','reactivos','pipeta','pipetas'],
-  'Limpieza': ['detergente','desinfectante','cloro','lejía','lejia','limpiador','wipes','sanitizante','desengrasante','suavizante'],
-  'Bebidas': ['refresco','soda','sodas','gaseosa','bebida energética','red bull','pepsi','coca cola','gatorade','bebida envasada','jugos','kombucha'],
-  'Replicas': ['replica','réplica','copia','imitacion','imitación','1:1','aaa','mirror quality','fake','falso','tenis replica','bolso replica','bolsos replica','tenis 1:1'],
-  'Documentos': ['documento','papeles','documentos','carta','factura','papel'],
-  'Piezas': ['pieza','piezas','repuesto','motor','aceite','freno','frenos','pieza automotriz'],
+  'Lentes': ['lentes de contacto','lentes','contact lenses','solución para lentes','acuvue','air optix'],
+  'Quimicos': ['alcohol isopropilico','alcohol isopropílico','acetona','reactivo','ácido','pipeta'],
+  'Limpieza': ['detergente','desinfectante','cloro','lejía','lejia','limpiador','wipes','sanitizante'],
+  'Bebidas': ['refresco','soda','sodas','gaseosa','bebida energética','red bull','pepsi','coca cola','gatorade'],
+  'Replicas': ['replica','réplica','copia','imitacion','imitación','1:1','aaa','fake','falso','tenis replica','bolso replica'],
+  'Documentos': ['documento','papeles','documentos','carta','factura'],
+  'Piezas': ['pieza','piezas','repuesto','motor','freno','frenos'],
   'Otro': ['otro','varios','miscelaneo','miscelánea','varios']
 };
 
 const categoryToTariffClass = (catName, origen) => {
   const specialCats = ['Perfumes','Cosméticos','Medicamentos','Suplementos','Semillas','Agroquímicos','Lentes','Quimicos','Limpieza','Bebidas','Replicas','Alimentos'];
+  if (!catName) return 'General';
   if (catName === 'Replicas') {
     if ((origen||'').toLowerCase().includes('colombia')) return 'Especial';
     return 'General';
@@ -465,6 +386,119 @@ function detectCategoryFromDescription(desc) {
   return null;
 }
 
+function usesKgForOrigin(origen) {
+  if (!origen) return false;
+  const s = origen.toLowerCase();
+  return ['colombia','mexico'].some(k => s.includes(k));
+}
+
+async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
+  const tarifas = await getCachedTarifas();
+  const exchangeRate = tarifas.j.exchangeRate || 1;
+  const deliveryCostCRC = tarifas.j.deliveryCRC || 0;
+  const origen = (state.origen || '').toLowerCase();
+  const pesoIngresado = parseFloat(state.peso) || 0;
+  const unidadIngresada = (state.unidad || 'lb').toLowerCase();
+  const tipoMercancia = state.tipoMercancia || 'General';
+  const descripcion = state.descripcion || '';
+  const entregaGAM = !!state.entregaGAM;
+
+  const pesoEnLb = unidadIngresada === 'kg' ? pesoIngresado * 2.20462 : pesoIngresado;
+  const pesoEnKg = unidadIngresada === 'lb' ? pesoIngresado / 2.20462 : pesoIngresado;
+
+  let tarifaUSD = 0;
+  let pesoFacturable = 0;
+  let unidadFacturable = 'lb';
+
+  if (['colombia','col'].some(k => origen.includes(k))) {
+    tarifaUSD = (tipoMercancia === 'Especial' || (state.categoriaFinal || '').toLowerCase().includes('réplica')) ? tarifas.colombia.conPermiso : tarifas.colombia.sinPermiso;
+    pesoFacturable = Math.ceil(pesoEnKg);
+    unidadFacturable = 'kg';
+  } else if (origen.includes('mexico')) {
+    tarifaUSD = tarifas.mexico.tarifa || 0;
+    pesoFacturable = Math.ceil(pesoEnKg);
+    unidadFacturable = 'kg';
+  } else if (origen.includes('china')) {
+    tarifaUSD = tarifas.china.tarifa || 0;
+    pesoFacturable = Math.ceil(pesoEnLb);
+    unidadFacturable = 'lb';
+  } else if (['miami','estados unidos','usa'].some(k => origen.includes(k))) {
+    tarifaUSD = (tipoMercancia === 'Especial') ? tarifas.miami.conPermiso : tarifas.miami.sinPermiso;
+    pesoFacturable = Math.ceil(pesoEnLb);
+    unidadFacturable = 'lb';
+  } else if (origen.includes('madrid') || origen.includes('espana') || origen.includes('españa')) {
+    tarifaUSD = (tipoMercancia === 'Especial') ? tarifas.espana.conPermiso : tarifas.espana.sinPermiso;
+    pesoFacturable = Math.ceil(pesoEnLb);
+    unidadFacturable = 'lb';
+  } else {
+    // fallback: assume lb
+    tarifaUSD = tarifas.miami && tarifas.miami.sinPermiso ? tarifas.miami.sinPermiso : 0;
+    pesoFacturable = Math.ceil(pesoEnLb);
+    unidadFacturable = 'lb';
+  }
+
+  tarifaUSD = Number(tarifaUSD) || 0;
+  const subtotalUSD = tarifaUSD * (pesoFacturable || 0);
+  const subtotalCRC = subtotalUSD * (exchangeRate || 1);
+  const discountPercent = getDiscountPercentByPesoFromArr(pesoFacturable, tarifas.discounts || []);
+  const discountAmountCRC = subtotalCRC * discountPercent;
+  const totalCRC = subtotalCRC - discountAmountCRC;
+  const deliveryCost = entregaGAM ? deliveryCostCRC : 0;
+  const totalWithDeliveryCRC = totalCRC + deliveryCost;
+  const id = 'COT-' + Math.random().toString(36).substr(2,9).toUpperCase();
+  const fechaLocal = new Date().toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' });
+  const clienteName = (state.client && state.client.nombre) ? state.client.nombre : (state.nombre || 'Cliente Telegram');
+  const contacto = (state.client && state.client.telefono) ? state.client.telefono : (state.telefono || '');
+  const email = (state.client && state.client.correo) ? state.client.correo : (state.correo || '');
+
+  const payload = {
+    id, fechaLocal, cliente: clienteName, origen, peso: pesoIngresado, unidad: unidadIngresada, tipoPermiso: tipoMercancia,
+    mercancia: descripcion + (state.deliveryMethod ? `\nMétodo envío: ${state.deliveryMethod}` : ''),
+    subtotalCRC, discountPercent, discountAmountCRC, totalCRC, deliveryCostCRC: deliveryCost,
+    totalWithDeliveryCRC, exchangeRate, pesoFacturable, unidadFacturable, contacto, email
+  };
+
+  await saveCotizacionToSheetAndNotifyAdmin(payload);
+  await guardarEnHistorial({
+    id, chatId, email, origen, tipoMercancia, peso: pesoIngresado, unidad: unidadIngresada, pesoFacturable, tarifa: tarifaUSD,
+    subtotal: subtotalUSD, discountPercent, discountAmount: discountAmountCRC / (exchangeRate || 1), total: totalCRC / (exchangeRate || 1)
+  });
+
+  return {
+    id, subtotalCRC, discountPercent, discountAmountCRC, totalCRC,
+    deliveryCostCRC: deliveryCost, totalWithDeliveryCRC, exchangeRate, pesoFacturable, unidadFacturable
+  };
+}
+
+function buildDiscountLegend(pesoFacturable, discountsArr, origen) {
+  const bands = [
+    { min: 15, max: 24, disc: discountsArr[0] || 0 },
+    { min: 25, max: 34, disc: discountsArr[1] || 0 },
+    { min: 35, max: 49, disc: discountsArr[2] || 0 },
+    { min: 50, max: 74, disc: discountsArr[3] || 0 },
+    { min: 75, max: Infinity, disc: discountsArr[4] || 0 }
+  ];
+  const unit = usesKgForOrigin(origen) ? 'kg' : 'lb';
+  if (!pesoFacturable || pesoFacturable <= 0) return '';
+  for (let i=0;i<bands.length;i++) {
+    const b = bands[i];
+    if (pesoFacturable >= b.min && pesoFacturable <= b.max) {
+      if (i === bands.length -1) {
+        return `💰 ¡Tu envío ya está obteniendo el descuento máximo (${b.disc}%)! Excelente decisión.`;
+      }
+      const next = bands[i+1];
+      const falta = Math.max(0, next.min - pesoFacturable);
+      // Opción 3: emocional y motivadora
+      return `💡 ¡Solo te faltan *${falta} ${unit}* para desbloquear un descuento del *${next.disc}%*! Aprovechá y ahorrá más en tu envío.`;
+    }
+  }
+  if (pesoFacturable < 15) {
+    const falta = 15 - pesoFacturable;
+    return `💡 ¡Solo te faltan *${falta} ${unit}* para desbloquear un descuento del *${bands[0].disc}%*! Aprovechá y ahorrá más en tu envío.`;
+  }
+  return '';
+}
+
 bot.onText(/\/start|\/ayuda|\/help/, (msg) => {
   const chatId = msg.chat.id;
   const name = (msg.from && msg.from.first_name) ? msg.from.first_name : 'Cliente';
@@ -476,7 +510,6 @@ bot.onText(/\/crear_casillero/, (msg) => {
   setUserState(chatId, { modo: 'CREAR_NOMBRE' });
   bot.sendMessage(chatId, 'Vamos a crear tu casillero. Primero, escribe tu *Nombre completo* (mínimo 1 nombre + 2 apellidos).', { parse_mode: 'Markdown' });
 });
-
 bot.onText(/\/mi_casillero/, async (msg) => {
   const chatId = msg.chat.id;
   const cached = getCachedPhone(chatId);
@@ -490,7 +523,6 @@ bot.onText(/\/mi_casillero/, async (msg) => {
   setUserState(chatId, { modo: 'MI_CASILLERO_PHONE' });
   bot.sendMessage(chatId, 'Por favor ingresa tu número de teléfono con el que te registraste (ej: 88885555):');
 });
-
 bot.onText(/\/consultar_tracking/, async (msg) => {
   const chatId = msg.chat.id;
   const cached = getCachedPhone(chatId);
@@ -504,7 +536,6 @@ bot.onText(/\/consultar_tracking/, async (msg) => {
   setUserState(chatId, { modo: 'CHECK_CASILLERO_PHONE' });
   bot.sendMessage(chatId, 'Escribe el número de teléfono con el que te registraste para ver tus paquetes (ej: 88885555).');
 });
-
 bot.onText(/\/saldo/, async (msg) => {
   const chatId = msg.chat.id;
   const cached = getCachedPhone(chatId);
@@ -518,7 +549,6 @@ bot.onText(/\/saldo/, async (msg) => {
   setUserState(chatId, { modo: 'CHECK_SALDO_PHONE' });
   bot.sendMessage(chatId, 'Por favor escribe el número de teléfono con el que te registraste para verificar tu saldo pendiente (ej: 88885555).');
 });
-
 bot.onText(/\/prealertar/, async (msg) => {
   const chatId = msg.chat.id;
   const cached = getCachedPhone(chatId);
@@ -532,7 +562,6 @@ bot.onText(/\/prealertar/, async (msg) => {
   setUserState(chatId, { modo: 'PREALERT_NUM' });
   bot.sendMessage(chatId, 'Vamos a prealertar un tracking. Escribe el NÚMERO DE TRACKING:');
 });
-
 bot.onText(/\/cotizar/, async (msg) => {
   const chatId = msg.chat.id;
   const cached = getCachedPhone(chatId);
@@ -623,12 +652,8 @@ bot.on('callback_query', async (query) => {
       }
     }
 
-    if (data === 'MENU|SI') {
-      return bot.sendMessage(chatId, 'Menú principal:', { reply_markup: mainMenuKeyboard() });
-    }
-    if (data === 'MENU|NO') {
-      return bot.sendMessage(chatId, 'Perfecto. Si necesitas algo más, escribe /menu.');
-    }
+    if (data === 'MENU|SI') return bot.sendMessage(chatId, 'Menú principal:', { reply_markup: mainMenuKeyboard() });
+    if (data === 'MENU|NO') return bot.sendMessage(chatId, 'Perfecto. Si necesitas algo más, escribe /menu.');
 
     if (data.startsWith('CATEGORIA|')) {
       const categoria = data.split('|')[1] || '';
@@ -700,39 +725,6 @@ bot.on('callback_query', async (query) => {
           return bot.sendMessage(chatId, 'Por favor ingresa tu número de teléfono con el que te registraste (ej: 88885555) o escribe "NO" para cotizar sin registro.');
         }
       }
-    }
-
-    if (data.startsWith('PRE_ORIG|')) {
-      const orig = data.split('|')[1];
-      const st = getUserState(chatId) || {};
-      st.prealertOrigen = orig;
-      st.modo = 'PREALERT_OBS';
-      setUserState(chatId, st);
-      return bot.sendMessage(chatId, 'Describe el tipo de mercancía y observaciones (obligatorio).');
-    }
-
-    if (data.startsWith('TRACK_PAGE|')) {
-      const page = parseInt(data.split('|')[1]||'1',10);
-      const st = getUserState(chatId) || {};
-      return sendTrackingList(chatId, st.itemsCache || [], page);
-    }
-    if (data.startsWith('TRACK_DETAIL|')) {
-      const idx = parseInt(data.split('|')[1]||'0',10);
-      const st = getUserState(chatId) || {};
-      const items = st.itemsCache || [];
-      const item = items[idx];
-      if (!item) return bot.sendMessage(chatId, 'Elemento no encontrado.');
-      const text = `📦 *Tracking:* ${item.tracking}\n*Origen:* ${item.origen}\n*Estado:* ${item.estado}\n*Peso:* ${item.peso}\n*Comentarios:* ${item.comentarios || '-'}`;
-      return bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
-    }
-    if (data.startsWith('TRACK_EXPORT|')) {
-      const st = getUserState(chatId) || {};
-      const items = st.itemsCache || [];
-      if (!items.length) return bot.sendMessage(chatId, 'No hay paquetes para exportar.');
-      let txt = `Respaldo de trackings (${items.length}):\n`;
-      items.forEach((it,i)=> { txt += `\n${i+1}. ${it.tracking} — ${it.origen} — ${it.estado} — ${it.peso}\nComentarios: ${it.comentarios||'-'}\n`; });
-      if (ADMIN_TELEGRAM_ID) await bot.sendMessage(ADMIN_TELEGRAM_ID, txt);
-      return bot.sendMessage(chatId, 'Listado enviado como respaldo al administrador.');
     }
 
   } catch (err) {
@@ -809,8 +801,6 @@ bot.on('message', async (msg) => {
 
     if (state.modo === 'COL_DESCRIPCION') {
       const desc = text;
-      const classification = classifyProductSimple({ descripcion: desc, origen: 'colombia' });
-      if (classification.tipo === 'Prohibida') { clearUserState(chatId); return bot.sendMessage(chatId, '⚠️ Mercancía prohibida para casillero en Colombia.'); }
       const nombreRegistro = (state.client && state.client.nombre) || 'Cliente';
       const dire = await getCachedDirecciones(nombreRegistro);
       const categoriaDetect = detectCategoryFromDescription(desc);
@@ -879,8 +869,7 @@ bot.on('message', async (msg) => {
       const detected = detectCategoryFromDescription(text);
       if (!state.categoriaFinal) state.categoriaFinal = detected || state.categoriaSeleccionada || null;
       const tipoClas = categoryToTariffClass(state.categoriaFinal || detected || '', state.origen || '');
-      if (tipoClas === 'Prohibida') { clearUserState(chatId); return bot.sendMessage(chatId, '⚠️ Mercancía prohibida. No podemos aceptarla.'); }
-      state.tipoMercancia = tipoClas === 'Especial' ? 'Especial' : 'General';
+      state.tipoMercancia = (tipoClas === 'Especial') ? 'Especial' : 'General';
       state.modo = 'COTIZAR_PESO';
       setUserState(chatId, state);
       return bot.sendMessage(chatId, 'Indica el PESO (ej: 2.3 kg, 4 lb).');
@@ -995,8 +984,6 @@ bot.on('message', async (msg) => {
     }
     if (state.modo === 'PREALERT_OBS') {
       const obs = text;
-      const classification = classifyProductSimple({ descripcion: obs, origen: state.prealertOrigen || '' });
-      if (classification.tipo === 'Prohibida') { clearUserState(chatId); return bot.sendMessage(chatId, '⚠️ Mercancía prohibida. No podemos aceptar esta prealerta.'); }
       let clienteName = (state.client && state.client.nombre) ? state.client.nombre : (state.nombre || 'Cliente Telegram');
       await savePrealertToDatos({
         tracking: state.prealertTracking,
@@ -1034,36 +1021,6 @@ async function sendTrackingList(chatId, items, page = 1) {
     reply_markup: { inline_keyboard: inline.concat([paging]) }
   });
   setUserState(chatId, { modo: 'TRACKING_LIST', itemsCache: items, page });
-}
-
-function buildDiscountLegend(pesoFacturable, discountsArr, origen) {
-  // discountsArr: [G4,G5,G6,G7,G8] as percentage numbers
-  const bands = [
-    { min: 15, max: 24, disc: discountsArr[0] || 0 },
-    { min: 25, max: 34, disc: discountsArr[1] || 0 },
-    { min: 35, max: 49, disc: discountsArr[2] || 0 },
-    { min: 50, max: 74, disc: discountsArr[3] || 0 },
-    { min: 75, max: Infinity, disc: discountsArr[4] || 0 }
-  ];
-  const usesKg = (o) => { const s = (o||'').toLowerCase(); return ['colombia','mexico'].some(k => s.includes(k)); };
-  const unit = usesKg(origen) ? 'kg' : 'lb';
-  if (!pesoFacturable || pesoFacturable <= 0) return '';
-  for (let i=0;i<bands.length;i++) {
-    const b = bands[i];
-    if (pesoFacturable >= b.min && pesoFacturable <= b.max) {
-      if (i === bands.length -1) {
-        return `💰 Estás en la banda de descuento más alta (${b.disc}%). ¡Excelente!`;
-      }
-      const next = bands[i+1];
-      const falta = Math.max(0, next.min - pesoFacturable);
-      return `💰 Tu descuento actual: ${b.disc}%\n\n📦 Si agregas *${falta} ${unit}* más, alcanzarás la banda con *${next.disc}%* de descuento.\n\n👉 Entre más peso traigas, mayor es tu ahorro.`;
-    }
-  }
-  if (pesoFacturable < 15) {
-    const falta = 15 - pesoFacturable;
-    return `💰 Actualmente no tienes descuento por volumen.\n\n📦 Si agregas *${falta} ${unit}* más, podrías obtener *${bands[0].disc}%* de descuento.\n\n👉 Entre más peso traigas, mayor es tu ahorro.`;
-  }
-  return '';
 }
 
 app.post(`/${TELEGRAM_TOKEN}`, (req, res) => { res.sendStatus(200); try { bot.processUpdate(req.body); } catch (e) { console.error('processUpdate error', e); } });
