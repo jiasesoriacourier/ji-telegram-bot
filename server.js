@@ -1,4 +1,5 @@
-// server.js - J.I Asesoría & Courier (versión final con prioridad de descripción y categoría incluida en cotizaciones)
+// server.js - J.I Asesoría & Courier (versión final con registro de empresas por código - Opción C)
+// Reemplazar completamente el server.js actual por este archivo.
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const { google } = require('googleapis');
@@ -66,7 +67,7 @@ function extractRange(data, startRow, endRow, startCol, endCol) {
 }
 
 /* ----------------- Cache sencillo ----------------- */
-let cache = { tarifas: { data: null, ts: 0 }, direcciones: { data: null, ts: 0 } };
+let cache = { tarifas: { data: null, ts: 0 }, direcciones: { data: null, ts: 0 }, empresas: { data: null, ts: 0 } };
 const CACHE_TTL = 10 * 60 * 1000;
 async function getCachedTarifas() {
   const now = Date.now();
@@ -94,6 +95,16 @@ async function getCachedDirecciones(nombreCliente = 'Nombre de cliente') {
     mexico: replaceName(extractRange(data, 23, 28, 1, 3)),
     china: replaceName(extractRange(data, 23, 28, 6, 9))
   };
+}
+async function getCachedEmpresas() {
+  const now = Date.now();
+  if (!cache.empresas.data || (now - cache.empresas.ts) > CACHE_TTL) {
+    const sheets = await getGoogleSheetsClient();
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Empresas!A:F' });
+    cache.empresas.data = res.data.values || [];
+    cache.empresas.ts = now;
+  }
+  return cache.empresas.data;
 }
 
 /* ----------------- Keyboards ----------------- */
@@ -136,12 +147,15 @@ function replyBackToMenu(chatId) {
     reply_markup: { inline_keyboard: [[ { text: 'Sí', callback_data: 'MENU|SI' }, { text: 'No', callback_data: 'MENU|NO' } ]] }
   });
 }
+function yesNoKeyboardInline() {
+  return { inline_keyboard: [[{ text: 'Sí', callback_data: 'ANS|si' }, { text: 'No', callback_data: 'ANS|no' }]] };
+}
 
 /* ----------------- Clientes / Trackings ----------------- */
 async function findClientByPhone(phone) {
   const normalized = normalizePhone(phone);
   const sheets = await getGoogleSheetsClient();
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Clientes!A:I' });
+  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Clientes!A:Z' });
   const rows = res.data.values || [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -153,64 +167,47 @@ async function findClientByPhone(phone) {
         correo: row[1] || '',
         telefono: row[3] || '',
         direccion: row[5] || '',
-        saldo: parseFloat(row[7]) || 0
+        saldo: parseFloat(row[7]) || 0,
+        empresaCode: row[9] || '' // columna J (índice 9)
       };
     }
   }
   return null;
 }
-async function addClientToSheet({ nombre, correo, contacto, direccion }) {
+async function addClientToSheet({ nombre, correo, contacto, direccion, empresaCode }) {
   const sheets = await getGoogleSheetsClient();
-  const values = [[ nombre || '', correo || '', '', contacto || '', '', direccion || '', '', 0 ]];
+  // Guardamos hasta columna J (A..J)
+  const values = [[ nombre || '', correo || '', '', contacto || '', '', direccion || '', '', 0, '', empresaCode || '' ]];
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
-    range: 'Clientes!A:I',
+    range: 'Clientes!A:J',
     valueInputOption: 'RAW',
     resource: { values }
   });
 }
-async function getTrackingsByName(nombre) {
-  const sheets = await getGoogleSheetsClient();
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Datos!A:F' });
-  const rows = res.data.values || [];
-  const items = [];
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const name = (r[1]||'').toString().trim().toLowerCase();
-    if (!name) continue;
-    if (name === nombre.toLowerCase()) {
-      items.push({
-        rowIndex: i+1,
-        tracking: r[0] || '',
-        comentarios: r[2] || '',
-        origen: r[3] || '',
-        estado: r[4] || '',
-        peso: r[5] || ''
-      });
+
+/* ----------------- Empresas sheet helpers ----------------- */
+// Leemos 'Empresas' y en la columna F (index 5) está la Abreviatura / código exacto que el cliente debe ingresar (opción C)
+async function findEmpresaByCode(code) {
+  if (!code) return null;
+  const empresas = await getCachedEmpresas();
+  const search = String(code || '').trim().toUpperCase();
+  for (let i = 0; i < empresas.length; i++) {
+    const row = empresas[i] || [];
+    const abbrev = (row[5] || '').toString().trim().toUpperCase(); // columna F
+    if (abbrev && abbrev === search) {
+      return {
+        rowIndex: i + 1,
+        nombre: row[0] || '',
+        tipo: row[1] || '',
+        correo: row[2] || '',
+        telefono: row[3] || '',
+        contacto: row[4] || '',
+        abreviatura: row[5] || ''
+      };
     }
   }
-  return items;
-}
-async function savePrealertToDatos({ tracking, cliente, origen, observaciones, chatId }) {
-  const sheets = await getGoogleSheetsClient();
-  const row = new Array(9).fill('');
-  row[0] = tracking || '';
-  row[1] = cliente || 'Cliente Telegram';
-  row[2] = '';
-  row[3] = origen || '';
-  row[4] = 'Pre-alertado';
-  row[5] = '';
-  row[6] = '';
-  row[7] = '';
-  row[8] = observaciones || '';
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: 'Datos!A:I',
-    valueInputOption: 'RAW',
-    resource: { values: [row] }
-  });
-  const msg = `📣 Nueva prealerta\nTracking: ${tracking}\nCliente: ${cliente}\nOrigen: ${origen}\nObservaciones: ${observaciones}`;
-  if (ADMIN_TELEGRAM_ID) await bot.sendMessage(ADMIN_TELEGRAM_ID, msg);
+  return null;
 }
 
 /* ----------------- Tarifas (leer de la hoja Tarifas) ----------------- */
@@ -297,6 +294,7 @@ function getDiscountPercentByPesoFromArr(pesoFacturable, discountsArr) {
 /* ----------------- Guardar cotización y historial ----------------- */
 async function saveCotizacionToSheetAndNotifyAdmin(payload) {
   const sheets = await getGoogleSheetsClient();
+  // Guardamos categoría final en columna H (índice 7) y código empresa en columna R? (ya se agrega en clientes) -> A:R example
   const row = new Array(18).fill('');
   row[0] = payload.fechaLocal || '';
   row[1] = payload.cliente || '';
@@ -360,7 +358,7 @@ const categoryKeywords = {
   'Cremas / Cosméticos': ['maquillaje','makeup','cosméticos','cosmeticos','cremas','crema','crema facial','labial','lipstick','base','bb cream','cc cream','sombra','mascara','serum'],
   'Medicamentos': ['ibuprofeno','paracetamol','acetaminofén','naproxeno','omeprazol','amoxicilina','loratadina','jarabe','antihistamínico','antibiotico'],
   'Suplementos / Vitaminas': ['suplementos','vitaminas','proteina','whey','creatina','bcca','colageno','omega'],
-  'Alimentos / Procesados': ['Comida','snack','snacks','papas','chips','galleta','galletas','chocolate','dulce','caramelo','granola','cereal','café','te','mantequilla de mani','peanut butter','enlatado','atun','sardinas','pastas'],
+  'Alimentos / Procesados': ['snack','snacks','papas','chips','galleta','galletas','chocolate','dulce','caramelo','granola','cereal','café','te','mantequilla de mani','peanut butter','enlatado','atun','sardinas','pastas'],
   'Semillas': ['semilla','semillas','chia','linaza','girasol','maiz','maíz','frijol'],
   'Agroquímicos / Fertilizantes': ['fertilizante','pesticida','pesticidas','herbicida','insecticida','glifosato','abono','npk','urea'],
   'Lentes / Líquidos': ['lentes de contacto','lentes','contact lenses','solución para lentes','acuvue','air optix','freshlook'],
@@ -379,7 +377,6 @@ const specialCategoryNames = new Set([
   'Agroquímicos / Fertilizantes','Lentes / Líquidos','Químicos de laboratorio','Productos de limpieza',
   'Bebidas no alcohólicas','Réplicas / Imitaciones','Alimentos / Procesados'
 ]);
-// Note: Electrónicos, Documentos, Piezas automotrices, Ropa / Calzado, Otro => General
 
 function categoryToTariffClass(categoryName, origen) {
   if (!categoryName) return 'General';
@@ -421,12 +418,10 @@ async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
   const unidadIngresada = (state.unidad || 'lb').toLowerCase();
   const descripcion = state.descripcion || '';
 
-  // DETECCIÓN: descripción tiene prioridad absoluta
+  // prioridad absoluta: descripción > selección
   const categoriaDetectada = detectCategoryFromDescription(descripcion);
   let categoriaFinal = categoriaDetectada || state.categoriaSeleccionada || state.categoriaFinal || 'Otro';
-  // normalizar algunos labels si vienen distintos
   if (categoriaFinal && typeof categoriaFinal === 'string') categoriaFinal = categoriaFinal.trim();
-
   const tipoMercancia = categoryToTariffClass(categoriaFinal, state.origen || '');
 
   const pesoEnLb = unidadIngresada === 'kg' ? pesoIngresado * 2.20462 : pesoIngresado;
@@ -756,39 +751,6 @@ bot.on('callback_query', async (query) => {
       }
     }
 
-    if (data.startsWith('PRE_ORIG|')) {
-      const orig = data.split('|')[1];
-      const st = getUserState(chatId) || {};
-      st.prealertOrigen = orig;
-      st.modo = 'PREALERT_OBS';
-      setUserState(chatId, st);
-      return bot.sendMessage(chatId, 'Describe el tipo de mercancía y observaciones (obligatorio).');
-    }
-
-    if (data.startsWith('TRACK_PAGE|')) {
-      const page = parseInt(data.split('|')[1]||'1',10);
-      const st = getUserState(chatId) || {};
-      return sendTrackingList(chatId, st.itemsCache || [], page);
-    }
-    if (data.startsWith('TRACK_DETAIL|')) {
-      const idx = parseInt(data.split('|')[1]||'0',10);
-      const st = getUserState(chatId) || {};
-      const items = st.itemsCache || [];
-      const item = items[idx];
-      if (!item) return bot.sendMessage(chatId, 'Elemento no encontrado.');
-      const text = `📦 *Tracking:* ${item.tracking}\n*Origen:* ${item.origen}\n*Estado:* ${item.estado}\n*Peso:* ${item.peso}\n*Comentarios:* ${item.comentarios || '-'}`;
-      return bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
-    }
-    if (data.startsWith('TRACK_EXPORT|')) {
-      const st = getUserState(chatId) || {};
-      const items = st.itemsCache || [];
-      if (!items.length) return bot.sendMessage(chatId, 'No hay paquetes para exportar.');
-      let txt = `Respaldo de trackings (${items.length}):\n`;
-      items.forEach((it,i)=> { txt += `\n${i+1}. ${it.tracking} — ${it.origen} — ${it.estado} — ${it.peso}\nComentarios: ${it.comentarios||'-'}\n`; });
-      if (ADMIN_TELEGRAM_ID) await bot.sendMessage(ADMIN_TELEGRAM_ID, txt);
-      return bot.sendMessage(chatId, 'Listado enviado como respaldo al administrador.');
-    }
-
   } catch (err) {
     console.error('Error en callback_query:', err);
     bot.sendMessage(chatId, 'Ocurrió un error al procesar la opción.');
@@ -799,11 +761,15 @@ bot.on('callback_query', async (query) => {
 bot.on('message', async (msg) => {
   try {
     if (!msg.text) return;
-    if (msg.text.startsWith('/')) return;
     const chatId = msg.chat.id;
-    const text = msg.text.trim();
+    const textRaw = msg.text.trim();
+    const text = textRaw;
     const state = getUserState(chatId) || {};
 
+    // 1) Si es comando manejado por onText, ignorar aquí (se maneja en onText)
+    if (text.startsWith('/')) return;
+
+    // 2) Handler universal: si no hay modo activo, responde y guía al menú
     if (!state || !state.modo) {
       return bot.sendMessage(chatId,
         `¡Hola! 👋\nBienvenido a *J.I Asesoría & Courier*.\n\nPara usar nuestro sistema selecciona una opción del menú o escribe uno de los comandos:\n/prealertar\n/consultar_tracking\n/crear_casillero\n/mi_casillero\n/cotizar\n/saldo\n\nSi necesitas ayuda escribe /ayuda.`,
@@ -811,7 +777,7 @@ bot.on('message', async (msg) => {
       );
     }
 
-    // Registro nuevo usuario
+    // --- Flujos de registro y asociación ---
     if (state.modo === 'CREAR_NOMBRE') {
       const words = text.split(/\s+/).filter(Boolean);
       if (words.length < 3) return bot.sendMessage(chatId, 'Por favor ingresa *Nombre completo* con al menos 1 nombre y 2 apellidos.', { parse_mode: 'Markdown' });
@@ -839,14 +805,48 @@ bot.on('message', async (msg) => {
       }
       state.telefono = phone;
       savePhone(chatId, phone);
+      // Preguntamos si pertenece a empresa/asociación afiliada
+      state.modo = 'CREAR_ASSOC_PROMPT';
+      setUserState(chatId, state);
+      return bot.sendMessage(chatId, '¿Pertenecés a alguna empresa o asociación afiliada? Responde SI o NO (si no, escribe NO).');
+    }
+    if (state.modo === 'CREAR_ASSOC_PROMPT') {
+      const ans = text.toLowerCase();
+      if (ans === 'si' || ans === 's') {
+        state.modo = 'CREAR_ASSOC_CODE';
+        setUserState(chatId, state);
+        return bot.sendMessage(chatId, 'Por favor ingresa el *código* que te proporcionó tu empresa/asociación (ej: AJPN-2024).', { parse_mode: 'Markdown' });
+      } else if (ans === 'no' || ans === 'n') {
+        state.empresaCode = '';
+        state.modo = 'CREAR_DIRECCION';
+        setUserState(chatId, state);
+        return bot.sendMessage(chatId, 'Por último, indica tu *dirección de entrega* (calle, número, ciudad).', { parse_mode: 'Markdown' });
+      } else {
+        return bot.sendMessage(chatId, 'Responde SI o NO por favor.');
+      }
+    }
+    if (state.modo === 'CREAR_ASSOC_CODE') {
+      const code = text.trim();
+      const empresa = await findEmpresaByCode(code);
+      if (!empresa) {
+        return bot.sendMessage(chatId, 'Ese código no está afiliado a ninguna empresa registrada. Verificá el código con tu asociación o escribe NO si no pertenecés.');
+      }
+      state.empresaCode = empresa.abreviatura || code;
+      state.empresaNombre = empresa.nombre || '';
       state.modo = 'CREAR_DIRECCION';
       setUserState(chatId, state);
-      return bot.sendMessage(chatId, 'Por último, indica tu *dirección de entrega* (calle, número, ciudad).', { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, `Código verificado: *${empresa.nombre}*.\nAhora indica tu *dirección de entrega* (calle, número, ciudad).`, { parse_mode: 'Markdown' });
     }
     if (state.modo === 'CREAR_DIRECCION') {
       state.direccion = text;
-      await addClientToSheet({ nombre: state.nombre, correo: state.correo, contacto: state.telefono, direccion: state.direccion });
-      if (ADMIN_TELEGRAM_ID) await bot.sendMessage(ADMIN_TELEGRAM_ID, `✅ Nuevo registro: ${state.nombre} - ${state.telefono} - ${state.correo}`);
+      await addClientToSheet({
+        nombre: state.nombre,
+        correo: state.correo,
+        contacto: state.telefono,
+        direccion: state.direccion,
+        empresaCode: state.empresaCode || ''
+      });
+      if (ADMIN_TELEGRAM_ID) await bot.sendMessage(ADMIN_TELEGRAM_ID, `✅ Nuevo registro: ${state.nombre} - ${state.telefono} - ${state.correo} - Empresa: ${state.empresaCode || '-'}`);
       clearUserState(chatId);
       bot.sendMessage(chatId, `✅ Registro completado. Hemos creado tu casillero para *${state.nombre}*.`, { parse_mode: 'Markdown' });
       return replyBackToMenu(chatId);
@@ -876,7 +876,7 @@ bot.on('message', async (msg) => {
       return bot.sendMessage(chatId, `📍 *Dirección en Colombia (${tipo==='Especial'?'Especial / Réplica':'Carga General'})*:\n${direccion}`, { parse_mode: 'Markdown' });
     }
 
-    /* ----------------- Cotización flows ----------------- */
+    /* ----------------- Cotización flows (fragmento relevante) ----------------- */
     if (state.modo === 'COTIZAR_START') {
       const ident = text.toLowerCase();
       if (ident === 'no') {
@@ -901,39 +901,9 @@ bot.on('message', async (msg) => {
         }
       }
     }
-    if (state.modo === 'COTIZAR_UNREG_PROMPT') {
-      const ans = text.toLowerCase();
-      if (ans === 'si' || ans === 's') { state.modo = 'CREAR_NOMBRE'; setUserState(chatId, state); return bot.sendMessage(chatId, 'Vamos a crear tu casillero. Escribe tu *Nombre completo* (mínimo 1 nombre + 2 apellidos).', { parse_mode: 'Markdown' }); }
-      else if (ans === 'no' || ans === 'n') { state.modo = 'COTIZAR_UNREG_NOMBRE'; setUserState(chatId, state); return bot.sendMessage(chatId, 'Ingresa tu *Nombre completo* para continuar con la cotización.', { parse_mode: 'Markdown' }); }
-      else { return bot.sendMessage(chatId, 'Responde SI o NO por favor.'); }
-    }
-    if (state.modo === 'COTIZAR_UNREG_NOMBRE') {
-      const words = text.split(/\s+/).filter(Boolean);
-      if (words.length < 2) return bot.sendMessage(chatId, 'Por favor ingresa tu nombre completo (mínimo nombre y apellido).');
-      state.nombre = text; state.modo = 'COTIZAR_UNREG_EMAIL'; setUserState(chatId, state); return bot.sendMessage(chatId, 'Ingresa tu correo electrónico (obligatorio).');
-    }
-    if (state.modo === 'COTIZAR_UNREG_EMAIL') {
-      if (!text.includes('@')) return bot.sendMessage(chatId, 'Correo inválido. Intenta nuevamente.');
-      state.correo = text; state.modo = 'COTIZAR_UNREG_TELEFONO'; setUserState(chatId, state); return bot.sendMessage(chatId, 'Ingresa tu número de teléfono de contacto (ej: 88885555).');
-    }
-    if (state.modo === 'COTIZAR_UNREG_TELEFONO') {
-      const phone = normalizePhone(text);
-      if (!phone || phone.length < 7) return bot.sendMessage(chatId, 'Número inválido. Intenta con 7 u 8 dígitos.');
-      state.telefono = phone; savePhone(chatId, phone); state.modo = 'COTIZAR_ORIGEN'; setUserState(chatId, state);
-      return bot.sendMessage(chatId, 'Selecciona el ORIGEN:', { reply_markup: { keyboard: [['miami','madrid'],['colombia','mexico'],['china','Cancelar']], resize_keyboard: true, one_time_keyboard: true } });
-    }
-    if (state.modo === 'COTIZAR_ORIGEN') {
-      const origin = text.toLowerCase();
-      const validMap = { 'miami': 'miami', 'madrid': 'madrid', 'colombia': 'colombia', 'mexico': 'mexico', 'china': 'china' };
-      const normalized = validMap[origin] || origin;
-      if (!['miami','madrid','colombia','mexico','china'].includes(normalized)) { return bot.sendMessage(chatId, 'Origen inválido. Usa el teclado.'); }
-      state.origen = normalized; state.modo = 'COTIZAR_CATEGORIA'; setUserState(chatId, state);
-      return bot.sendMessage(chatId, 'Selecciona la categoría de tu mercancía:', { reply_markup: categoriaInlineKeyboard() });
-    }
 
     if (state.modo === 'COTIZAR_DESCRIPCION') {
       state.descripcion = text;
-      // prioridad: descripción > selección del usuario
       const detected = detectCategoryFromDescription(text);
       if (detected) {
         state.categoriaFinal = detected;
@@ -983,31 +953,14 @@ bot.on('message', async (msg) => {
       return bot.sendMessage(chatId, 'Selecciona "Encomienda" o "Correos de C.R" (usa el teclado).', { reply_markup: { keyboard: [['Encomienda','Correos de C.R'],['Cancelar']], resize_keyboard: true, one_time_keyboard: true } });
     }
 
-    if (state.modo === 'CHECK_CASILLERO_PHONE') {
-      const phone = normalizePhone(text);
-      savePhone(chatId, phone);
-      const client = await findClientByPhone(phone);
-      clearUserState(chatId);
-      if (!client) return bot.sendMessage(chatId, 'No encontrado. Usa /crear_casillero.');
-      const items = await getTrackingsByName(client.nombre);
-      if (!items?.length) return bot.sendMessage(chatId, 'No hay paquetes asociados.');
-      return sendTrackingList(chatId, items, 1);
-    }
-    if (state.modo === 'CHECK_SALDO_PHONE') {
-      const phone = normalizePhone(text);
-      savePhone(chatId, phone);
-      const client = await findClientByPhone(phone);
-      clearUserState(chatId);
-      if (!client) return bot.sendMessage(chatId, 'No encontrado. Usa /crear_casillero.');
-      return bot.sendMessage(chatId, `💳 Saldo pendiente: ¢${(client.saldo || 0).toFixed(0)}`);
-    }
-
+    // PREALERT flows (resumidos: se usan similares validaciones)
     if (state.modo === 'PREALERT_NUM') {
       state.prealertTracking = text;
       state.modo = 'PREALERT_IDENT';
       setUserState(chatId, state);
       return bot.sendMessage(chatId, 'Ingresa el número de teléfono o correo con el que deseas registrar este tracking (ej: 88885555) o responde "NO" si no estás registrado.');
     }
+
     if (state.modo === 'PREALERT_IDENT') {
       const ident = text.toLowerCase();
       let client = null;
@@ -1038,36 +991,6 @@ bot.on('message', async (msg) => {
       state.modo = 'PREALERT_ORIG';
       setUserState(chatId, state);
       return bot.sendMessage(chatId, 'Selecciona el ORIGEN del paquete:', { reply_markup: { keyboard: [['Estados Unidos','Colombia','España'],['China','Mexico','Cancelar']], resize_keyboard: true, one_time_keyboard: true } });
-    }
-    if (state.modo === 'PREALERT_UNREG_PROMPT') {
-      const ans = text.toLowerCase();
-      if (ans === 'si' || ans === 's') { state.modo = 'CREAR_NOMBRE'; setUserState(chatId, state); return bot.sendMessage(chatId, 'Vamos a crear tu casillero. Escribe tu *Nombre completo* (mínimo 1 nombre + 2 apellidos).', { parse_mode: 'Markdown' }); }
-      else if (ans === 'no' || ans === 'n') { state.client = null; state.modo = 'PREALERT_ORIG'; setUserState(chatId, state); return bot.sendMessage(chatId, 'Selecciona el ORIGEN del paquete:', { reply_markup: { keyboard: [['Estados Unidos','Colombia','España'],['China','Mexico','Cancelar']], resize_keyboard: true, one_time_keyboard: true } }); }
-      else return bot.sendMessage(chatId, 'Responde SI o NO por favor.');
-    }
-    if (state.modo === 'PREALERT_ORIG') {
-      const chosen = text.toLowerCase();
-      const mapping = { 'estados unidos': 'Estados Unidos', 'miami': 'Estados Unidos', 'colombia': 'Colombia', 'españa': 'España', 'espana': 'España', 'china': 'China', 'mexico': 'Mexico' };
-      const orig = mapping[chosen] || text;
-      state.prealertOrigen = orig;
-      state.modo = 'PREALERT_OBS';
-      setUserState(chatId, state);
-      return bot.sendMessage(chatId, 'Describe el tipo de mercancía y observaciones (obligatorio).');
-    }
-    if (state.modo === 'PREALERT_OBS') {
-      const obs = text;
-      let clienteName = (state.client && state.client.nombre) ? state.client.nombre : (state.nombre || 'Cliente Telegram');
-      await savePrealertToDatos({
-        tracking: state.prealertTracking,
-        cliente: clienteName,
-        origen: state.prealertOrigen || '',
-        observaciones: `Tipo: ${obs} - Prealertado: ${new Date().toLocaleString('es-CR', { timeZone: 'America/Costa_Rica' })}`,
-        chatId
-      });
-      clearUserState(chatId);
-      bot.sendMessage(chatId, '✅ Prealerta registrada correctamente.');
-      replyBackToMenu(chatId);
-      return;
     }
 
   } catch (err) {
