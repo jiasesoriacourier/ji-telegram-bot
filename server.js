@@ -1,4 +1,4 @@
-// server.js - J.I Asesoría & Courier (reemplazar archivo actual)
+// server.js - J.I Asesoría & Courier (versión final con prioridad de descripción y categoría incluida en cotizaciones)
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const { google } = require('googleapis');
@@ -9,11 +9,13 @@ const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || '';
 const URL_BASE = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`;
 if (!TELEGRAM_TOKEN) throw new Error('Falta TELEGRAM_TOKEN en variables de entorno');
 if (!SPREADSHEET_ID) throw new Error('Falta SPREADSHEET_ID en variables de entorno');
+
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
+/* ----------------- Estado y cache local ----------------- */
 const userStates = new Map();
 function setUserState(chatId, state) { userStates.set(String(chatId), state); }
 function getUserState(chatId) { return userStates.get(String(chatId)) || null; }
@@ -29,6 +31,7 @@ function getCachedPhone(chatId) {
   return e.phone;
 }
 
+/* ----------------- Google Sheets client ----------------- */
 async function getGoogleSheetsClient() {
   let credsRaw = process.env.GOOGLE_CREDENTIALS || '';
   if (!credsRaw) throw new Error('Falta GOOGLE_CREDENTIALS en env');
@@ -39,6 +42,7 @@ async function getGoogleSheetsClient() {
   return google.sheets({ version: 'v4', auth: client });
 }
 
+/* ----------------- Utilidades ----------------- */
 function normalizePhone(p) {
   if (!p) return '';
   let s = p.toString().trim();
@@ -46,10 +50,24 @@ function normalizePhone(p) {
   if (s.startsWith('506')) s = s.slice(3);
   return s;
 }
+function extractRange(data, startRow, endRow, startCol, endCol) {
+  const lines = [];
+  for (let r = startRow; r <= endRow; r++) {
+    if (r >= data.length) continue;
+    const row = data[r] || [];
+    const cells = [];
+    for (let c = startCol; c <= endCol; c++) {
+      const cell = (row[c] || '').toString().trim();
+      if (cell) cells.push(cell);
+    }
+    if (cells.length > 0) lines.push(cells.join(' '));
+  }
+  return lines.join('\n');
+}
 
+/* ----------------- Cache sencillo ----------------- */
 let cache = { tarifas: { data: null, ts: 0 }, direcciones: { data: null, ts: 0 } };
 const CACHE_TTL = 10 * 60 * 1000;
-
 async function getCachedTarifas() {
   const now = Date.now();
   if (!cache.tarifas.data || (now - cache.tarifas.ts) > CACHE_TTL) {
@@ -77,21 +95,8 @@ async function getCachedDirecciones(nombreCliente = 'Nombre de cliente') {
     china: replaceName(extractRange(data, 23, 28, 6, 9))
   };
 }
-function extractRange(data, startRow, endRow, startCol, endCol) {
-  const lines = [];
-  for (let r = startRow; r <= endRow; r++) {
-    if (r >= data.length) continue;
-    const row = data[r] || [];
-    const cells = [];
-    for (let c = startCol; c <= endCol; c++) {
-      const cell = (row[c] || '').toString().trim();
-      if (cell) cells.push(cell);
-    }
-    if (cells.length > 0) lines.push(cells.join(' '));
-  }
-  return lines.join('\n');
-}
 
+/* ----------------- Keyboards ----------------- */
 function mainMenuKeyboard() {
   return {
     keyboard: [
@@ -106,10 +111,10 @@ function mainMenuKeyboard() {
 function categoriaInlineKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: 'Electrónicos', callback_data: 'CATEGORIA|Electrónicos' }, { text: 'Ropa / Calzado', callback_data: 'CATEGORIA|Ropa' }],
-      [{ text: 'Perfumería', callback_data: 'CATEGORIA|Perfumería' }, { text: 'Medicinas / Suplementos', callback_data: 'CATEGORIA|Medicinas' }],
-      [{ text: 'Alimentos', callback_data: 'CATEGORIA|Alimentos' }, { text: 'Cosméticos', callback_data: 'CATEGORIA|Cosméticos' }],
-      [{ text: 'Réplicas / Imitaciones', callback_data: 'CATEGORIA|Réplicas' }, { text: 'Piezas automotrices', callback_data: 'CATEGORIA|Piezas' }],
+      [{ text: 'Electrónicos', callback_data: 'CATEGORIA|Electrónicos' }, { text: 'Ropa / Calzado', callback_data: 'CATEGORIA|Ropa / Calzado' }],
+      [{ text: 'Colonias / Perfumes', callback_data: 'CATEGORIA|Colonias / Perfumes' }, { text: 'Medicamentos', callback_data: 'CATEGORIA|Medicamentos' }],
+      [{ text: 'Alimentos / Procesados', callback_data: 'CATEGORIA|Alimentos / Procesados' }, { text: 'Cremas / Cosméticos', callback_data: 'CATEGORIA|Cremas / Cosméticos' }],
+      [{ text: 'Réplicas / Imitaciones', callback_data: 'CATEGORIA|Réplicas / Imitaciones' }, { text: 'Piezas automotrices', callback_data: 'CATEGORIA|Piezas automotrices' }],
       [{ text: 'Documentos', callback_data: 'CATEGORIA|Documentos' }, { text: 'Otro', callback_data: 'CATEGORIA|Otro' }]
     ]
   };
@@ -125,15 +130,14 @@ function casilleroPaisesKeyboard() {
     ]
   };
 }
-function siNoInlineKeyboard() {
-  return { inline_keyboard: [[{ text: 'SI', callback_data: 'GAM|si' }, { text: 'NO', callback_data: 'GAM|no' }]] };
-}
+function siNoInlineKeyboard() { return { inline_keyboard: [[{ text: 'SI', callback_data: 'GAM|si' }, { text: 'NO', callback_data: 'GAM|no' }]] }; }
 function replyBackToMenu(chatId) {
   bot.sendMessage(chatId, '¿Deseas volver al menú principal?', {
     reply_markup: { inline_keyboard: [[ { text: 'Sí', callback_data: 'MENU|SI' }, { text: 'No', callback_data: 'MENU|NO' } ]] }
   });
 }
 
+/* ----------------- Clientes / Trackings ----------------- */
 async function findClientByPhone(phone) {
   const normalized = normalizePhone(phone);
   const sheets = await getGoogleSheetsClient();
@@ -165,7 +169,6 @@ async function addClientToSheet({ nombre, correo, contacto, direccion }) {
     resource: { values }
   });
 }
-
 async function getTrackingsByName(nombre) {
   const sheets = await getGoogleSheetsClient();
   const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Datos!A:F' });
@@ -210,6 +213,7 @@ async function savePrealertToDatos({ tracking, cliente, origen, observaciones, c
   if (ADMIN_TELEGRAM_ID) await bot.sendMessage(ADMIN_TELEGRAM_ID, msg);
 }
 
+/* ----------------- Tarifas (leer de la hoja Tarifas) ----------------- */
 async function leerTarifas() {
   const sheets = await getGoogleSheetsClient();
   const ranges = [
@@ -221,8 +225,8 @@ async function leerTarifas() {
     'Tarifas!B11',// España con permiso
     'Tarifas!B14',// China tarifa
     'Tarifas!B15',// México tarifa
-    'Tarifas!G4:G8', // descuentos porcentuales (15-24,25-34,35-49,50-74,75+)
-    'Tarifas!J1:J3'  // entrega y tipo de cambio (J1,J2,J3)
+    'Tarifas!G4:G8', // descuentos
+    'Tarifas!J1:J3'  // entrega y tipo de cambio
   ];
   const read = await sheets.spreadsheets.values.batchGet({ spreadsheetId: SPREADSHEET_ID, ranges });
   const valueRanges = read.data.valueRanges || [];
@@ -254,16 +258,15 @@ async function leerTarifas() {
   let deliveryCRC = 0, exchangeRate = 1;
   try {
     const jVals = valueRanges[9] && valueRanges[9].values ? valueRanges[9].values : [];
-    // jVals is array of rows (may contain empty rows)
-    // Ensure we pull J1 (row 0), J2 (row1), J3 (row2) safely; if missing, search for numeric fallback
     deliveryCRC = parseFloat((jVals[0] && jVals[0][0]) ? String(jVals[0][0]).replace(',', '.') : 0) || 0;
-    // Prefer row 2 (index 2) for exchange rate; if not present, find first numeric in jVals
+    // read J3 directly (index 2)
     exchangeRate = (jVals[2] && jVals[2][0]) ? parseFloat(String(jVals[2][0]).replace(',', '.')) : null;
     if (!exchangeRate) {
-      for (let r of jVals) {
-        if (r && r[0] && !isNaN(parseFloat(String(r[0]).replace(',', '.')))) {
-          exchangeRate = parseFloat(String(r[0]).replace(',', '.'));
-        }
+      // fallback: try find numeric in that small array but do not pick delivery cost
+      for (let r = 0; r < jVals.length; r++) {
+        if (r === 0) continue;
+        const v = jVals[r] && jVals[r][0];
+        if (v && !isNaN(parseFloat(String(v).replace(',', '.')))) { exchangeRate = parseFloat(String(v).replace(',', '.')); break; }
       }
     }
     exchangeRate = exchangeRate || 1;
@@ -280,6 +283,7 @@ async function leerTarifas() {
   };
 }
 
+/* ----------------- Discounts helper ----------------- */
 function getDiscountPercentByPesoFromArr(pesoFacturable, discountsArr) {
   if (!discountsArr || discountsArr.length < 5) return 0;
   if (pesoFacturable >= 75) return (discountsArr[4]||0) / 100;
@@ -290,9 +294,10 @@ function getDiscountPercentByPesoFromArr(pesoFacturable, discountsArr) {
   return 0;
 }
 
+/* ----------------- Guardar cotización y historial ----------------- */
 async function saveCotizacionToSheetAndNotifyAdmin(payload) {
   const sheets = await getGoogleSheetsClient();
-  const row = new Array(17).fill('');
+  const row = new Array(18).fill('');
   row[0] = payload.fechaLocal || '';
   row[1] = payload.cliente || '';
   row[2] = payload.origen || '';
@@ -300,19 +305,20 @@ async function saveCotizacionToSheetAndNotifyAdmin(payload) {
   row[4] = payload.unidad || '';
   row[5] = payload.tipoPermiso || '';
   row[6] = payload.mercancia || '';
-  row[7] = Math.round(payload.subtotalCRC || 0);
-  row[8] = Math.round(payload.discountAmountCRC || 0);
-  row[9] = Math.round(payload.totalCRC || 0);
-  row[10] = Math.round(payload.deliveryCostCRC || 0);
-  row[11] = Math.round(payload.totalWithDeliveryCRC || 0);
-  row[12] = payload.exchangeRate || '';
-  row[13] = '';
-  row[14] = payload.id || '';
-  row[15] = payload.contacto || '';
-  row[16] = payload.email || '';
+  row[7] = payload.categoriaFinal || '';
+  row[8] = Math.round(payload.subtotalCRC || 0);
+  row[9] = Math.round(payload.discountAmountCRC || 0);
+  row[10] = Math.round(payload.totalCRC || 0);
+  row[11] = Math.round(payload.deliveryCostCRC || 0);
+  row[12] = Math.round(payload.totalWithDeliveryCRC || 0);
+  row[13] = payload.exchangeRate || '';
+  row[14] = '';
+  row[15] = payload.id || '';
+  row[16] = payload.contacto || '';
+  row[17] = payload.email || '';
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
-    range: 'Cotizaciones!A:Q',
+    range: 'Cotizaciones!A:R',
     valueInputOption: 'RAW',
     resource: { values: [row] }
   });
@@ -322,6 +328,7 @@ async function saveCotizacionToSheetAndNotifyAdmin(payload) {
     `Fecha: ${payload.fechaLocal}`,
     `Cliente: ${payload.cliente}`,
     `Origen: ${payload.origen}`,
+    `Categoría seleccionada / usada: ${payload.categoriaFinal || '-'}`,
     `Peso declarado: ${payload.peso} ${payload.unidad}`,
     `Peso facturable: ${payload.pesoFacturable} ${payload.unidadFacturable}`,
     `Tipo: ${payload.tipoPermiso}`,
@@ -347,51 +354,64 @@ async function guardarEnHistorial(data) {
   await sheets.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_ID, range: 'Historial!A:Z', valueInputOption: 'RAW', resource: { values } });
 }
 
+/* ----------------- Diccionario de keywords por categoría (display names) ----------------- */
 const categoryKeywords = {
-  'Perfumes': ['perfume','perfumes','colonia','colonias','fragancia','fragancias','eau de parfum','edp','eau de toilette','edt','dior','chanel','miss dior','bleu de chanel','paco rabanne','gucci','armani','versace','tommy hilfiger','victoria\'s secret'],
-  'Cosméticos': ['maquillaje','makeup','cosméticos','cosmeticos','cremas','crema','crema facial','labial','lipstick','base','bb cream','cc cream','sombra','mascara','rimel','iluminador','serum'],
-  'Medicamentos': ['ibuprofeno','paracetamol','acetaminofén','naproxeno','omeprazol','amoxicilina','loratadina','jarabe','antihistamínico','vitamina','vitaminas','antibiótico'],
-  'Suplementos': ['suplementos','vitaminas','proteina','whey','creatina','bcca','colageno','omega'],
-  'Alimentos': ['snack','snacks','papas','chips','galleta','galletas','chocolate','dulce','caramelo','granola','cereal','café','te','mantequilla de maní','peanut butter','salsa','enlatado','atun','sardinas','pastas'],
+  'Colonias / Perfumes': ['perfume','perfumes','colonia','colonias','fragancia','fragancias','eau de parfum','edp','eau de toilette','edt'],
+  'Cremas / Cosméticos': ['maquillaje','makeup','cosméticos','cosmeticos','cremas','crema','crema facial','labial','lipstick','base','bb cream','cc cream','sombra','mascara','serum'],
+  'Medicamentos': ['ibuprofeno','paracetamol','acetaminofén','naproxeno','omeprazol','amoxicilina','loratadina','jarabe','antihistamínico','antibiotico'],
+  'Suplementos / Vitaminas': ['suplementos','vitaminas','proteina','whey','creatina','bcca','colageno','omega'],
+  'Alimentos / Procesados': ['snack','snacks','papas','chips','galleta','galletas','chocolate','dulce','caramelo','granola','cereal','café','te','mantequilla de mani','peanut butter','enlatado','atun','sardinas','pastas'],
   'Semillas': ['semilla','semillas','chia','linaza','girasol','maiz','maíz','frijol'],
-  'Agroquímicos': ['fertilizante','pesticida','pesticidas','herbicida','insecticida','glifosato','abono','npk','urea'],
-  'Lentes': ['lentes de contacto','lentes','contact lenses','solución para lentes','acuvue','air optix'],
-  'Quimicos': ['alcohol isopropilico','alcohol isopropílico','acetona','reactivo','ácido','pipeta'],
-  'Limpieza': ['detergente','desinfectante','cloro','lejía','lejia','limpiador','wipes','sanitizante'],
-  'Bebidas': ['refresco','soda','sodas','gaseosa','bebida energética','red bull','pepsi','coca cola','gatorade'],
-  'Replicas': ['replica','réplica','copia','imitacion','imitación','1:1','aaa','fake','falso','tenis replica','bolso replica'],
-  'Documentos': ['documento','papeles','documentos','carta','factura'],
-  'Piezas': ['pieza','piezas','repuesto','motor','freno','frenos'],
-  'Otro': ['otro','varios','miscelaneo','miscelánea','varios']
+  'Agroquímicos / Fertilizantes': ['fertilizante','pesticida','pesticidas','herbicida','insecticida','glifosato','abono','npk','urea'],
+  'Lentes / Líquidos': ['lentes de contacto','lentes','contact lenses','solución para lentes','acuvue','air optix','freshlook'],
+  'Químicos de laboratorio': ['alcohol isopropilico','alcohol isopropílico','acetona','reactivo','ácido','pipeta','reactivos'],
+  'Productos de limpieza': ['detergente','desinfectante','cloro','lejía','lejia','limpiador','wipes','sanitizante'],
+  'Bebidas no alcohólicas': ['refresco','soda','sodas','gaseosa','bebida energética','red bull','pepsi','coca cola','gatorade'],
+  'Réplicas / Imitaciones': ['replica','réplica','copia','imitacion','imitación','1:1','aaa','fake','falso','tenis replica','bolso replica'],
+  'Documentos': ['documento','papeles','carta','factura'],
+  'Piezas automotrices': ['pieza','piezas','repuesto','motor','freno','frenos'],
+  'Electrónicos': ['televisor','tv','celular','telefono','smartphone','electronico','cámara','camera','tablet','laptop','ordenador','cargador']
 };
 
-const categoryToTariffClass = (catName, origen) => {
-  const specialCats = ['Perfumes','Cosméticos','Medicamentos','Suplementos','Semillas','Agroquímicos','Lentes','Quimicos','Limpieza','Bebidas','Replicas','Alimentos'];
-  if (!catName) return 'General';
-  if (catName === 'Replicas') {
+/* ----------------- decidir si categoría es Especial o General ----------------- */
+const specialCategoryNames = new Set([
+  'Colonias / Perfumes','Cremas / Cosméticos','Medicamentos','Suplementos / Vitaminas','Semillas',
+  'Agroquímicos / Fertilizantes','Lentes / Líquidos','Químicos de laboratorio','Productos de limpieza',
+  'Bebidas no alcohólicas','Réplicas / Imitaciones','Alimentos / Procesados'
+]);
+// Note: Electrónicos, Documentos, Piezas automotrices, Ropa / Calzado, Otro => General
+
+function categoryToTariffClass(categoryName, origen) {
+  if (!categoryName) return 'General';
+  if (categoryName === 'Réplicas / Imitaciones') {
     if ((origen||'').toLowerCase().includes('colombia')) return 'Especial';
     return 'General';
   }
-  if (specialCats.includes(catName)) return 'Especial';
+  if (specialCategoryNames.has(categoryName)) return 'Especial';
   return 'General';
-};
+}
 
+/* ----------------- Detectar categoría desde descripción (PRIORIDAD) ----------------- */
 function detectCategoryFromDescription(desc) {
   const t = (desc || '').toLowerCase();
-  for (const cat of Object.keys(categoryKeywords)) {
-    for (const kw of categoryKeywords[cat]) {
+  if (!t) return null;
+  for (const [cat, keywords] of Object.entries(categoryKeywords)) {
+    for (const kw of keywords) {
+      if (!kw) continue;
       if (t.includes(kw.toLowerCase())) return cat;
     }
   }
   return null;
 }
 
+/* ----------------- Unidad por origen ----------------- */
 function usesKgForOrigin(origen) {
   if (!origen) return false;
   const s = origen.toLowerCase();
   return ['colombia','mexico'].some(k => s.includes(k));
 }
 
+/* ----------------- Cálculo y registro de cotización ----------------- */
 async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
   const tarifas = await getCachedTarifas();
   const exchangeRate = tarifas.j.exchangeRate || 1;
@@ -399,9 +419,15 @@ async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
   const origen = (state.origen || '').toLowerCase();
   const pesoIngresado = parseFloat(state.peso) || 0;
   const unidadIngresada = (state.unidad || 'lb').toLowerCase();
-  const tipoMercancia = state.tipoMercancia || 'General';
   const descripcion = state.descripcion || '';
-  const entregaGAM = !!state.entregaGAM;
+
+  // DETECCIÓN: descripción tiene prioridad absoluta
+  const categoriaDetectada = detectCategoryFromDescription(descripcion);
+  let categoriaFinal = categoriaDetectada || state.categoriaSeleccionada || state.categoriaFinal || 'Otro';
+  // normalizar algunos labels si vienen distintos
+  if (categoriaFinal && typeof categoriaFinal === 'string') categoriaFinal = categoriaFinal.trim();
+
+  const tipoMercancia = categoryToTariffClass(categoriaFinal, state.origen || '');
 
   const pesoEnLb = unidadIngresada === 'kg' ? pesoIngresado * 2.20462 : pesoIngresado;
   const pesoEnKg = unidadIngresada === 'lb' ? pesoIngresado / 2.20462 : pesoIngresado;
@@ -411,7 +437,7 @@ async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
   let unidadFacturable = 'lb';
 
   if (['colombia','col'].some(k => origen.includes(k))) {
-    tarifaUSD = (tipoMercancia === 'Especial' || (state.categoriaFinal || '').toLowerCase().includes('réplica')) ? tarifas.colombia.conPermiso : tarifas.colombia.sinPermiso;
+    tarifaUSD = (tipoMercancia === 'Especial') ? tarifas.colombia.conPermiso : tarifas.colombia.sinPermiso;
     pesoFacturable = Math.ceil(pesoEnKg);
     unidadFacturable = 'kg';
   } else if (origen.includes('mexico')) {
@@ -431,7 +457,6 @@ async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
     pesoFacturable = Math.ceil(pesoEnLb);
     unidadFacturable = 'lb';
   } else {
-    // fallback: assume lb
     tarifaUSD = tarifas.miami && tarifas.miami.sinPermiso ? tarifas.miami.sinPermiso : 0;
     pesoFacturable = Math.ceil(pesoEnLb);
     unidadFacturable = 'lb';
@@ -443,6 +468,7 @@ async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
   const discountPercent = getDiscountPercentByPesoFromArr(pesoFacturable, tarifas.discounts || []);
   const discountAmountCRC = subtotalCRC * discountPercent;
   const totalCRC = subtotalCRC - discountAmountCRC;
+  const entregaGAM = !!state.entregaGAM;
   const deliveryCost = entregaGAM ? deliveryCostCRC : 0;
   const totalWithDeliveryCRC = totalCRC + deliveryCost;
   const id = 'COT-' + Math.random().toString(36).substr(2,9).toUpperCase();
@@ -452,24 +478,26 @@ async function calcularYRegistrarCotizacionRespaldo(chatId, state) {
   const email = (state.client && state.client.correo) ? state.client.correo : (state.correo || '');
 
   const payload = {
-    id, fechaLocal, cliente: clienteName, origen, peso: pesoIngresado, unidad: unidadIngresada, tipoPermiso: tipoMercancia,
-    mercancia: descripcion + (state.deliveryMethod ? `\nMétodo envío: ${state.deliveryMethod}` : ''),
+    id, fechaLocal, cliente: clienteName, origen: state.origen || '', peso: pesoIngresado, unidad: unidadIngresada,
+    tipoPermiso: tipoMercancia, mercancia: descripcion || '', categoriaFinal,
     subtotalCRC, discountPercent, discountAmountCRC, totalCRC, deliveryCostCRC: deliveryCost,
     totalWithDeliveryCRC, exchangeRate, pesoFacturable, unidadFacturable, contacto, email
   };
 
   await saveCotizacionToSheetAndNotifyAdmin(payload);
   await guardarEnHistorial({
-    id, chatId, email, origen, tipoMercancia, peso: pesoIngresado, unidad: unidadIngresada, pesoFacturable, tarifa: tarifaUSD,
-    subtotal: subtotalUSD, discountPercent, discountAmount: discountAmountCRC / (exchangeRate || 1), total: totalCRC / (exchangeRate || 1)
+    id, chatId, email, origen: state.origen || '', tipoMercancia, peso: pesoIngresado, unidad: unidadIngresada,
+    pesoFacturable, tarifa: tarifaUSD, subtotal: subtotalUSD, discountPercent,
+    discountAmount: discountAmountCRC / (exchangeRate || 1), total: totalCRC / (exchangeRate || 1)
   });
 
   return {
     id, subtotalCRC, discountPercent, discountAmountCRC, totalCRC,
-    deliveryCostCRC: deliveryCost, totalWithDeliveryCRC, exchangeRate, pesoFacturable, unidadFacturable
+    deliveryCostCRC: deliveryCost, totalWithDeliveryCRC, exchangeRate, pesoFacturable, unidadFacturable, categoriaFinal
   };
 }
 
+/* ----------------- Leyenda de descuento (Opción 3: emocional) ----------------- */
 function buildDiscountLegend(pesoFacturable, discountsArr, origen) {
   const bands = [
     { min: 15, max: 24, disc: discountsArr[0] || 0 },
@@ -488,7 +516,6 @@ function buildDiscountLegend(pesoFacturable, discountsArr, origen) {
       }
       const next = bands[i+1];
       const falta = Math.max(0, next.min - pesoFacturable);
-      // Opción 3: emocional y motivadora
       return `💡 ¡Solo te faltan *${falta} ${unit}* para desbloquear un descuento del *${next.disc}%*! Aprovechá y ahorrá más en tu envío.`;
     }
   }
@@ -499,6 +526,7 @@ function buildDiscountLegend(pesoFacturable, discountsArr, origen) {
   return '';
 }
 
+/* ----------------- Bot commands & flows ----------------- */
 bot.onText(/\/start|\/ayuda|\/help/, (msg) => {
   const chatId = msg.chat.id;
   const name = (msg.from && msg.from.first_name) ? msg.from.first_name : 'Cliente';
@@ -576,6 +604,7 @@ bot.onText(/\/cotizar/, async (msg) => {
   bot.sendMessage(chatId, 'Ingresa tu número de teléfono (ej: 88885555) o escribe "NO" si no estás registrado.');
 });
 
+/* ----------------- Callback handling ----------------- */
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data || '';
@@ -714,7 +743,7 @@ bot.on('callback_query', async (query) => {
             const tarifas = await getCachedTarifas();
             const discountLegend = buildDiscountLegend(res.pesoFacturable, tarifas.discounts || [], st.origen);
             const nota = "\n\n📝 Nota: Los montos aquí mostrados son aproximados y pueden variar según el tipo de cambio al momento del cobro, el peso final del paquete y la clasificación real de la mercancía.";
-            const msg = `✅ Cotización generada\nID: ${res.id}\nFecha: ${fechaLocal}\nOrigen: ${st.origen}\nPeso facturable: ${res.pesoFacturable} ${res.unidadFacturable}\nSubtotal: ¢${res.subtotalCRC.toFixed(0)}\nDescuento: ¢${res.discountAmountCRC.toFixed(0)} (${(res.discountPercent*100).toFixed(1)}%)\nCosto entrega: ¢${res.deliveryCostCRC.toFixed(0)}\nTotal (con entrega): ¢${res.totalWithDeliveryCRC.toFixed(0)}\n(Tipo de cambio usado: ${res.exchangeRate})${nota}\n\n${discountLegend}`;
+            const msg = `✅ Cotización generada\nID: ${res.id}\nFecha: ${fechaLocal}\nOrigen: ${st.origen}\nCategoría: ${res.categoriaFinal || st.categoriaSeleccionada || '-'}\nPeso facturable: ${res.pesoFacturable} ${res.unidadFacturable}\nSubtotal: ¢${res.subtotalCRC.toFixed(0)}\nDescuento: ¢${res.discountAmountCRC.toFixed(0)} (${(res.discountPercent*100).toFixed(1)}%)\nCosto entrega: ¢${res.deliveryCostCRC.toFixed(0)}\nTotal (con entrega): ¢${res.totalWithDeliveryCRC.toFixed(0)}\n(Tipo de cambio usado: ${res.exchangeRate})${nota}\n\n${discountLegend}`;
             await bot.sendMessage(chatId, msg);
             replyBackToMenu(chatId);
           } catch (e) {
@@ -727,12 +756,46 @@ bot.on('callback_query', async (query) => {
       }
     }
 
+    if (data.startsWith('PRE_ORIG|')) {
+      const orig = data.split('|')[1];
+      const st = getUserState(chatId) || {};
+      st.prealertOrigen = orig;
+      st.modo = 'PREALERT_OBS';
+      setUserState(chatId, st);
+      return bot.sendMessage(chatId, 'Describe el tipo de mercancía y observaciones (obligatorio).');
+    }
+
+    if (data.startsWith('TRACK_PAGE|')) {
+      const page = parseInt(data.split('|')[1]||'1',10);
+      const st = getUserState(chatId) || {};
+      return sendTrackingList(chatId, st.itemsCache || [], page);
+    }
+    if (data.startsWith('TRACK_DETAIL|')) {
+      const idx = parseInt(data.split('|')[1]||'0',10);
+      const st = getUserState(chatId) || {};
+      const items = st.itemsCache || [];
+      const item = items[idx];
+      if (!item) return bot.sendMessage(chatId, 'Elemento no encontrado.');
+      const text = `📦 *Tracking:* ${item.tracking}\n*Origen:* ${item.origen}\n*Estado:* ${item.estado}\n*Peso:* ${item.peso}\n*Comentarios:* ${item.comentarios || '-'}`;
+      return bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+    }
+    if (data.startsWith('TRACK_EXPORT|')) {
+      const st = getUserState(chatId) || {};
+      const items = st.itemsCache || [];
+      if (!items.length) return bot.sendMessage(chatId, 'No hay paquetes para exportar.');
+      let txt = `Respaldo de trackings (${items.length}):\n`;
+      items.forEach((it,i)=> { txt += `\n${i+1}. ${it.tracking} — ${it.origen} — ${it.estado} — ${it.peso}\nComentarios: ${it.comentarios||'-'}\n`; });
+      if (ADMIN_TELEGRAM_ID) await bot.sendMessage(ADMIN_TELEGRAM_ID, txt);
+      return bot.sendMessage(chatId, 'Listado enviado como respaldo al administrador.');
+    }
+
   } catch (err) {
     console.error('Error en callback_query:', err);
     bot.sendMessage(chatId, 'Ocurrió un error al procesar la opción.');
   }
 });
 
+/* ----------------- Mensajes de texto / flujos ----------------- */
 bot.on('message', async (msg) => {
   try {
     if (!msg.text) return;
@@ -748,6 +811,7 @@ bot.on('message', async (msg) => {
       );
     }
 
+    // Registro nuevo usuario
     if (state.modo === 'CREAR_NOMBRE') {
       const words = text.split(/\s+/).filter(Boolean);
       if (words.length < 3) return bot.sendMessage(chatId, 'Por favor ingresa *Nombre completo* con al menos 1 nombre y 2 apellidos.', { parse_mode: 'Markdown' });
@@ -788,6 +852,7 @@ bot.on('message', async (msg) => {
       return replyBackToMenu(chatId);
     }
 
+    // Mi casillero flow
     if (state.modo === 'MI_CASILLERO_PHONE') {
       const phone = normalizePhone(text);
       savePhone(chatId, phone);
@@ -799,6 +864,7 @@ bot.on('message', async (msg) => {
       return bot.sendMessage(chatId, 'Hola. Selecciona el país de tu casillero:', { reply_markup: casilleroPaisesKeyboard() });
     }
 
+    // Colombia casillero description
     if (state.modo === 'COL_DESCRIPCION') {
       const desc = text;
       const nombreRegistro = (state.client && state.client.nombre) || 'Cliente';
@@ -810,6 +876,7 @@ bot.on('message', async (msg) => {
       return bot.sendMessage(chatId, `📍 *Dirección en Colombia (${tipo==='Especial'?'Especial / Réplica':'Carga General'})*:\n${direccion}`, { parse_mode: 'Markdown' });
     }
 
+    /* ----------------- Cotización flows ----------------- */
     if (state.modo === 'COTIZAR_START') {
       const ident = text.toLowerCase();
       if (ident === 'no') {
@@ -866,8 +933,13 @@ bot.on('message', async (msg) => {
 
     if (state.modo === 'COTIZAR_DESCRIPCION') {
       state.descripcion = text;
+      // prioridad: descripción > selección del usuario
       const detected = detectCategoryFromDescription(text);
-      if (!state.categoriaFinal) state.categoriaFinal = detected || state.categoriaSeleccionada || null;
+      if (detected) {
+        state.categoriaFinal = detected;
+      } else if (state.categoriaSeleccionada) {
+        state.categoriaFinal = state.categoriaSeleccionada;
+      }
       const tipoClas = categoryToTariffClass(state.categoriaFinal || detected || '', state.origen || '');
       state.tipoMercancia = (tipoClas === 'Especial') ? 'Especial' : 'General';
       state.modo = 'COTIZAR_PESO';
@@ -898,7 +970,7 @@ bot.on('message', async (msg) => {
           const tarifas = await getCachedTarifas();
           const discountLegend = buildDiscountLegend(res.pesoFacturable, tarifas.discounts || [], state.origen);
           const nota = "\n\n📝 Nota: Los montos aquí mostrados son aproximados y pueden variar según el tipo de cambio al momento del cobro, el peso final del paquete y la clasificación real de la mercancía.";
-          const msg = `✅ Cotización generada\nID: ${res.id}\nFecha: ${fechaLocal}\nOrigen: ${state.origen}\nPeso facturable: ${res.pesoFacturable} ${res.unidadFacturable}\nSubtotal: ¢${res.subtotalCRC.toFixed(0)}\nDescuento: ¢${res.discountAmountCRC.toFixed(0)} (${(res.discountPercent*100).toFixed(1)}%)\nCosto entrega: ¢${res.deliveryCostCRC.toFixed(0)}\nTotal (con entrega): ¢${res.totalWithDeliveryCRC.toFixed(0)}\n(Tipo de cambio usado: ${res.exchangeRate})${nota}\n\n${discountLegend}`;
+          const msg = `✅ Cotización generada\nID: ${res.id}\nFecha: ${fechaLocal}\nOrigen: ${state.origen}\nCategoría: ${res.categoriaFinal || state.categoriaSeleccionada || '-'}\nPeso facturable: ${res.pesoFacturable} ${res.unidadFacturable}\nSubtotal: ¢${res.subtotalCRC.toFixed(0)}\nDescuento: ¢${res.discountAmountCRC.toFixed(0)} (${(res.discountPercent*100).toFixed(1)}%)\nCosto entrega: ¢${res.deliveryCostCRC.toFixed(0)}\nTotal (con entrega): ¢${res.totalWithDeliveryCRC.toFixed(0)}\n(Tipo de cambio usado: ${res.exchangeRate})${nota}\n\n${discountLegend}`;
           bot.sendMessage(chatId, msg);
           replyBackToMenu(chatId);
           return;
@@ -965,12 +1037,12 @@ bot.on('message', async (msg) => {
       state.client = client || null;
       state.modo = 'PREALERT_ORIG';
       setUserState(chatId, state);
-      return bot.sendMessage(chatId, 'Selecciona el ORIGEN del paquete:', { reply_markup: origenKeyboardForPrealert() });
+      return bot.sendMessage(chatId, 'Selecciona el ORIGEN del paquete:', { reply_markup: { keyboard: [['Estados Unidos','Colombia','España'],['China','Mexico','Cancelar']], resize_keyboard: true, one_time_keyboard: true } });
     }
     if (state.modo === 'PREALERT_UNREG_PROMPT') {
       const ans = text.toLowerCase();
       if (ans === 'si' || ans === 's') { state.modo = 'CREAR_NOMBRE'; setUserState(chatId, state); return bot.sendMessage(chatId, 'Vamos a crear tu casillero. Escribe tu *Nombre completo* (mínimo 1 nombre + 2 apellidos).', { parse_mode: 'Markdown' }); }
-      else if (ans === 'no' || ans === 'n') { state.client = null; state.modo = 'PREALERT_ORIG'; setUserState(chatId, state); return bot.sendMessage(chatId, 'Selecciona el ORIGEN del paquete:', { reply_markup: origenKeyboardForPrealert() }); }
+      else if (ans === 'no' || ans === 'n') { state.client = null; state.modo = 'PREALERT_ORIG'; setUserState(chatId, state); return bot.sendMessage(chatId, 'Selecciona el ORIGEN del paquete:', { reply_markup: { keyboard: [['Estados Unidos','Colombia','España'],['China','Mexico','Cancelar']], resize_keyboard: true, one_time_keyboard: true } }); }
       else return bot.sendMessage(chatId, 'Responde SI o NO por favor.');
     }
     if (state.modo === 'PREALERT_ORIG') {
@@ -1004,6 +1076,7 @@ bot.on('message', async (msg) => {
   }
 });
 
+/* ----------------- Track list helper ----------------- */
 const TRACKS_PER_PAGE = 5;
 async function sendTrackingList(chatId, items, page = 1) {
   if (!items?.length) return bot.sendMessage(chatId, 'No se encontraron paquetes.');
@@ -1023,6 +1096,7 @@ async function sendTrackingList(chatId, items, page = 1) {
   setUserState(chatId, { modo: 'TRACKING_LIST', itemsCache: items, page });
 }
 
+/* ----------------- Webhook / Server ----------------- */
 app.post(`/${TELEGRAM_TOKEN}`, (req, res) => { res.sendStatus(200); try { bot.processUpdate(req.body); } catch (e) { console.error('processUpdate error', e); } });
 app.get('/', (req, res) => res.send('✅ Bot de Telegram activo - J.I Asesoría & Courier'));
 const PORT = process.env.PORT || 3000;
