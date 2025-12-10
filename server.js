@@ -1,3 +1,4 @@
+
 // server.js - J.I Asesoría & Courier (versión corregida)
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
@@ -620,7 +621,9 @@ bot.on('callback_query', async (query) => {
         if (target === 'MI_CASILLERO') {
           const client = await findClientByPhone(cached);
           if (!client) return bot.sendMessage(chatId, 'Número no registrado. Usa /crear_casillero o ingresa otro número.');
-          setUserState(chatId, { client });
+          const prev = getUserState(chatId) || {};
+  prev.client = client;
+  setUserState(chatId, prev);
           const dire = await getCachedDirecciones(client.nombre);
           return bot.sendMessage(chatId, 'Hola. Selecciona el país de tu casillero:', { reply_markup: casilleroPaisesKeyboard() });
         }
@@ -686,7 +689,7 @@ bot.on('callback_query', async (query) => {
 
     if (data.startsWith('CATEGORIA|')) {
       const categoria = data.split('|')[1] || '';
-      const state = getUserState(chatId) || {};
+      const state = getUserState(chatId);
       state.categoriaSeleccionada = categoria;
       state.categoriaFinal = categoria;
       state.modo = 'COTIZAR_DESCRIPCION';
@@ -697,12 +700,12 @@ bot.on('callback_query', async (query) => {
     if (data.startsWith('CASILLERO|')) {
       const pais = data.split('|')[1] || '';
       if (pais === 'colombia') {
-        const state = getUserState(chatId) || {};
+        const state = getUserState(chatId);
         state.modo = 'COL_DESCRIPCION';
         setUserState(chatId, state);
         return bot.sendMessage(chatId, 'Describe brevemente la mercancía que recibirás en Colombia (ej: "camisetas", "perfume Chanel", "zapatos Nike réplica"):');
       } else {
-        const state = getUserState(chatId) || {};
+        const state = getUserState(chatId);
         const nombreRegistro = (state.client && state.client.nombre) || 'Cliente';
         const dire = await getCachedDirecciones(nombreRegistro);
         let direccion = 'No disponible';
@@ -809,7 +812,7 @@ bot.on('message', async (msg) => {
     if (msg.text.startsWith('/')) return;
     const chatId = msg.chat.id;
     const text = msg.text.trim();
-    const state = getUserState(chatId) || {};
+    const state = getUserState(chatId);
 
     if (!state || !state.modo) {
       return bot.sendMessage(chatId,
