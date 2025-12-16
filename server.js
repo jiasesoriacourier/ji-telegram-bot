@@ -630,7 +630,7 @@ async function saveCotizacionToSheetAndNotifyAdmin(payload) {
   row[4] = payload.unidad || '';
   row[5] = payload.tipoPermiso || '';
   row[6] = payload.mercancia || '';
-  row[16] = payload.categoriaFinal || '';
+  row[17] = payload.categoriaFinal || '';
   row[7] = Math.round(payload.subtotalCRC || 0);
   row[8] = Math.round(payload.discountAmountCRC || 0);
   row[9] = Math.round(payload.totalCRC || 0);
