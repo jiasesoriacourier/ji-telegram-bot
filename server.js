@@ -138,7 +138,11 @@ function mainMenuInline() {
       [
         { text: '💳 Saldo Pendiente', callback_data: 'MENU|SALDO' },
         { text: '❓ Ayuda', callback_data: 'MENU|AYUDA' }
-      ]
+      ],
+      [
+        { text: '👤 Registro / Crear Casillero', callback_data: 'MENU|REGISTRO' }
+      ],
+
     ]
   };
 }
@@ -818,7 +822,7 @@ async function promptPhoneOrUseCache(chatId, target) {
   const state = getState(chatId) || {};
   if (cached) {
     setState(chatId, { ...state, modo: 'CONFIRM_USE_CACHED_PHONE', target, menuMessageId: state.menuMessageId, cachedPhone: cached });
-    await bot.sendMessage(chatId, `📞 ¿Deseás usar el mismo número (termina en *${maskPhone(cached).slice(-4)}*)?`, {
+    await bot.sendMessage(chatId, `📞 ¿Deseás usar el mismo número *${maskPhone(cached)}*?`, {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [[
@@ -897,6 +901,7 @@ bot.on('callback_query', async (query) => {
       if (action === 'CASILLERO') return startCasillero(chatId);
       if (action === 'SALDO') return startSaldo(chatId);
       if (action === 'AYUDA') return showAyuda(chatId);
+      if (action === 'REGISTRO') return startRegistro(chatId);
       return upsertMenu(chatId, { edit: true });
     }
 
@@ -960,21 +965,6 @@ bot.on('callback_query', async (query) => {
       await bot.sendMessage(chatId, '✅ Listo. Un agente fue notificado y te contactará lo antes posible.', { reply_markup: backToMenuInline() });
       return;
     }
-
-    // Cotización como invitado (cuando el teléfono no está registrado)
-    if (st.modo === 'COT_GUEST_NAME') {
-      const words = text.split(/\s+/).filter(Boolean);
-      if (words.length < 2) return bot.sendMessage(chatId, 'Por favor escribí nombre y apellido.', { reply_markup: backToMenuInline() });
-      setState(chatId, { ...st, nombre: text, modo: 'COT_GUEST_EMAIL' });
-      return bot.sendMessage(chatId, '✉️ Escribí tu correo electrónico:', { reply_markup: backToMenuInline() });
-    }
-
-    if (st.modo === 'COT_GUEST_EMAIL') {
-      if (!text.includes('@')) return bot.sendMessage(chatId, 'Correo inválido. Intentá nuevamente.', { reply_markup: backToMenuInline() });
-      setState(chatId, { ...st, correo: text, modo: 'COT_ORIG' });
-      return bot.sendMessage(chatId, '📍 Seleccioná el *origen*:', { parse_mode: 'Markdown', reply_markup: originsInline('COT|ORIG') });
-    }
-
 
     // Registro: afiliada SI/NO
     if (data.startsWith('REG|AFILIADA|')) {
@@ -1318,6 +1308,18 @@ bot.on('message', async (msg) => {
 /* =========================================================
  * 16) Arranque de flujos (desde menú)
  * ======================================================= */
+
+async function startRegistro(chatId) {
+  clearState(chatId);
+  const base = getState(chatId) || {};
+  // inicia flujo de registro
+  setState(chatId, { ...base, modo: 'REG_NOMBRE', menuMessageId: base.menuMessageId });
+  await bot.sendMessage(chatId, '✅ *Registro (crear casillero)*\n\nPor favor escribí tu *nombre completo*:', {
+    parse_mode: 'Markdown',
+    reply_markup: backToMenuInline()
+  });
+}
+
 async function startTracking(chatId) {
   clearState(chatId);
   const base = getState(chatId) || {};
