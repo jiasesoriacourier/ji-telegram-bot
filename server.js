@@ -135,7 +135,10 @@ function mainMenuInline() {
         { text: '📝 Prealertar Paquete', callback_data: 'MENU|PREALERTA' },
         { text: '🏷️ Mi Casillero', callback_data: 'MENU|CASILLERO' }
       ],
-      [{ text: '❓ Ayuda', callback_data: 'MENU|AYUDA' }]
+      [
+        { text: '💳 Saldo Pendiente', callback_data: 'MENU|SALDO' },
+        { text: '❓ Ayuda', callback_data: 'MENU|AYUDA' }
+      ]
     ]
   };
 }
@@ -388,13 +391,13 @@ async function getCachedEmpresaCodes() {
 async function leerTarifas() {
   const sheets = await getGoogleSheetsClient();
   const ranges = [
-    'Tarifas!B3', // Miami sin permiso
-    'Tarifas!B4', // Miami con permiso
+    'Tarifas!B2', // Miami sin permiso
+    'Tarifas!B3', // Miami con permiso
     'Tarifas!B6', // Colombia sin permiso
     'Tarifas!B7', // Colombia con permiso
     'Tarifas!B10',// España sin permiso
     'Tarifas!B11',// España con permiso
-    'Tarifas!B14',// China tarifa
+    'Tarifas!B13',// China tarifa
     'Tarifas!B15',// México tarifa
     'Tarifas!G4:G8', // descuentos
     'Tarifas!J1:J3'  // entrega y tipo de cambio
@@ -815,7 +818,7 @@ async function promptPhoneOrUseCache(chatId, target) {
   const state = getState(chatId) || {};
   if (cached) {
     setState(chatId, { ...state, modo: 'CONFIRM_USE_CACHED_PHONE', target, menuMessageId: state.menuMessageId, cachedPhone: cached });
-    await bot.sendMessage(chatId, `📞 ¿Deseás usar el mismo número *${maskPhone(cached)}*?`, {
+    await bot.sendMessage(chatId, `📞 ¿Deseás usar el mismo número (termina en *${maskPhone(cached).slice(-4)}*)?`, {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [[
@@ -849,6 +852,42 @@ bot.on('callback_query', async (query) => {
       return upsertMenu(chatId, { edit: true });
     }
 
+
+    // Registro (crear casillero)
+    if (data === 'FLOW|REGISTRO') {
+      const st = getState(chatId) || {};
+      setState(chatId, { ...st, modo: 'REG_NOMBRE', menuMessageId: st.menuMessageId });
+      return bot.sendMessage(chatId, '✅ Registro (crear casillero)\n\nPor favor escribí tu *nombre completo*:', { parse_mode: 'Markdown', reply_markup: backToMenuInline() });
+    }
+
+    // Tracking listado (paginación/detalle)
+    if (data.startsWith('TRK|PAGE|')) {
+      const page = parseInt(data.split('|')[2] || '1', 10);
+      const st = getState(chatId) || {};
+      return sendTrackingList(chatId, st.itemsCache || [], page);
+    }
+
+    if (data.startsWith('TRK|DET|')) {
+      const idx = parseInt(data.split('|')[2] || '0', 10);
+      const st = getState(chatId) || {};
+      const item = (st.itemsCache || [])[idx];
+      if (!item) return bot.sendMessage(chatId, 'Elemento no encontrado.', { reply_markup: backToMenuInline() });
+
+      const detalle = [
+        '📦 *Detalle de paquete*',
+        '━━━━━━━━━━━━━━━━━━━━',
+        `🔎 *Tracking:* ${item.tracking || '-'}`,
+        `📍 *Origen:* ${item.origen || '-'}`,
+        `📌 *Estado:* ${item.estado || '-'}`,
+        `⚖️ *Peso:* ${item.peso || '-'}`,
+        `🗒️ *Comentarios internos:* ${item.comentariosInternos || '-'}`,
+        `🗓️ *Fecha:* ${item.fecha || '-'}`,
+        '',
+        '⬅️ Podés regresar al menú cuando gustés.'
+      ].join('\n');
+
+      return bot.sendMessage(chatId, detalle, { parse_mode: 'Markdown', reply_markup: backToMenuInline() });
+    }
     // Menú principal
     if (data.startsWith('MENU|')) {
       const action = data.split('|')[1];
@@ -856,6 +895,7 @@ bot.on('callback_query', async (query) => {
       if (action === 'COTIZAR') return startCotizar(chatId);
       if (action === 'PREALERTA') return startPrealerta(chatId);
       if (action === 'CASILLERO') return startCasillero(chatId);
+      if (action === 'SALDO') return startSaldo(chatId);
       if (action === 'AYUDA') return showAyuda(chatId);
       return upsertMenu(chatId, { edit: true });
     }
@@ -1292,6 +1332,13 @@ async function startCasillero(chatId) {
   await promptPhoneOrUseCache(chatId, 'CASILLERO');
 }
 
+async function startSaldo(chatId) {
+  clearState(chatId);
+  const base = getState(chatId) || {};
+  setState(chatId, { ...base, modo: null, menuMessageId: base.menuMessageId });
+  await promptPhoneOrUseCache(chatId, 'SALDO');
+}
+
 async function startPrealerta(chatId) {
   clearState(chatId);
   const base = getState(chatId) || {};
@@ -1376,7 +1423,25 @@ async function routeAfterPhone(chatId, target, phone, prevState = {}) {
     return;
   }
 
-  if (target === 'PREALERTA') {
+    if (target === 'SALDO') {
+    const nombre = client?.nombre || 'Cliente';
+    const saldo = safeParseNumber(client?.saldo || 0);
+    const msg = [
+      '💳 *Saldo Pendiente*',
+      '━━━━━━━━━━━━━━━━━━━━',
+      `👤 Cliente: *${nombre}*`,
+      `📞 Teléfono: *${maskPhone(phone)}*`,
+      `💰 Saldo: *₡${saldo.toLocaleString('es-CR')}*`,
+      '',
+      'Si necesitás ayuda para cancelar o tenés dudas, elegí *Ayuda* en el menú.'
+    ].join('\n');
+
+    clearState(chatId);
+    await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown', reply_markup: backToMenuInline() });
+    return upsertMenu(chatId, { edit: true });
+  }
+
+if (target === 'PREALERTA') {
     setState(chatId, { ...stateBase, modo: 'PRE_TRACKING' });
     await bot.sendMessage(chatId, '📦 Escribí el *número de tracking*:', { parse_mode: 'Markdown', reply_markup: backToMenuInline() });
     return;
@@ -1418,21 +1483,11 @@ async function finishCotizacion(chatId) {
   }
 }
 
-/* =========================================================
- * 20) Registro desde botón (callback FLOW|REGISTRO)
- * ======================================================= */
-bot.on('callback_query', async (query) => {
-  const chatId = query.message?.chat?.id;
-  const data = query.data || '';
-  await safeAnswerCallback(query);
-  if (!chatId) return;
 
-  if (data === 'FLOW|REGISTRO') {
-    const st = getState(chatId) || {};
-    setState(chatId, { ...st, modo: 'REG_NOMBRE', menuMessageId: st.menuMessageId });
-    return bot.sendMessage(chatId, '✅ Registro (crear casillero)\n\nEscribí tu *nombre completo* (mínimo 1 nombre + 2 apellidos):', { parse_mode: 'Markdown', reply_markup: backToMenuInline() });
-  }
-});
+
+/* =========================================================
+ * 21) Tracking listado (paginación)
+ * ======================================================= */
 
 /* =========================================================
  * 21) Tracking listado (inline paginado + detalle)
@@ -1475,46 +1530,8 @@ async function sendTrackingList(chatId, items, page = 1) {
   setState(chatId, { ...st, modo: 'TRACK_LIST', itemsCache: items, page, menuMessageId: st.menuMessageId });
 }
 
-bot.on('callback_query', async (query) => {
-  const chatId = query.message?.chat?.id;
-  const data = query.data || '';
-  await safeAnswerCallback(query);
-  if (!chatId) return;
 
-  try {
-    if (data.startsWith('TRK|PAGE|')) {
-      const page = parseInt(data.split('|')[2] || '1', 10);
-      const st = getState(chatId) || {};
-      return sendTrackingList(chatId, st.itemsCache || [], page);
-    }
 
-    if (data.startsWith('TRK|DET|')) {
-      const idx = parseInt(data.split('|')[2] || '0', 10);
-      const st = getState(chatId) || {};
-      const item = (st.itemsCache || [])[idx];
-      if (!item) return bot.sendMessage(chatId, 'Elemento no encontrado.', { reply_markup: backToMenuInline() });
-
-      const detalle = [
-        '📦 *Detalle de paquete*',
-        '━━━━━━━━━━━━━━━━━━━━',
-        `🔎 *Tracking:* ${item.tracking || '-'}`,
-        `📍 *Origen:* ${item.origen || '-'}`,
-        `📌 *Estado:* ${item.estado || '-'}`,
-        `⚖️ *Peso:* ${item.peso || '-'}`,
-        `🗒️ *Comentarios internos:* ${item.comentariosInternos || '-'}`,
-        `🗓️ *Fecha:* ${item.fecha || '-'}`,
-        '',
-        '⬅️ Podés regresar al menú cuando gustés.'
-      ].join('\n');
-
-      return bot.sendMessage(chatId, detalle, { parse_mode: 'Markdown', reply_markup: backToMenuInline() });
-    }
-  } catch (e) {
-    console.error('tracking callback error:', e);
-    bot.sendMessage(chatId, 'Ocurrió un error mostrando tus paquetes.');
-    return upsertMenu(chatId, { edit: true });
-  }
-});
 
 /* =========================================================
  * 22) Webhook / Server
