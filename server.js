@@ -630,17 +630,17 @@ async function saveCotizacionToSheetAndNotifyAdmin(payload) {
   row[4] = payload.unidad || '';
   row[5] = payload.tipoPermiso || '';
   row[6] = payload.mercancia || '';
-  row[7] = payload.categoriaFinal || '';
-  row[8] = Math.round(payload.subtotalCRC || 0);
-  row[9] = Math.round(payload.discountAmountCRC || 0);
-  row[10] = Math.round(payload.totalCRC || 0);
-  row[11] = Math.round(payload.deliveryCostCRC || 0);
-  row[12] = Math.round(payload.totalWithDeliveryCRC || 0);
-  row[13] = payload.exchangeRate || '';
-  row[14] = ''; // libre
-  row[15] = payload.id || '';
-  row[16] = payload.contacto || '';
-  row[17] = payload.email || '';
+  row[16] = payload.categoriaFinal || '';
+  row[7] = Math.round(payload.subtotalCRC || 0);
+  row[8] = Math.round(payload.discountAmountCRC || 0);
+  row[9] = Math.round(payload.totalCRC || 0);
+  row[10] = Math.round(payload.deliveryCostCRC || 0);
+  row[11] = Math.round(payload.totalWithDeliveryCRC || 0);
+  row[12] = payload.exchangeRate || '';
+  row[13] = ''; // libre
+  row[14] = payload.id || '';
+  row[15] = payload.contacto || '';
+  row[16] = payload.email || '';
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
