@@ -395,14 +395,14 @@ async function getCachedEmpresaCodes() {
 async function leerTarifas() {
   const sheets = await getGoogleSheetsClient();
   const ranges = [
-    'Tarifas!B2', // Miami sin permiso
-    'Tarifas!B3', // Miami con permiso
-    'Tarifas!B6', // Colombia sin permiso
-    'Tarifas!B7', // Colombia con permiso
-    'Tarifas!B10',// España sin permiso
-    'Tarifas!B11',// España con permiso
-    'Tarifas!B13',// China tarifa
-    'Tarifas!B15',// México tarifa
+    'Tarifas!B3', // Miami sin permiso
+    'Tarifas!B4', // Miami con permiso
+    'Tarifas!B7', // Colombia sin permiso
+    'Tarifas!B8', // Colombia con permiso
+    'Tarifas!B11',// España sin permiso
+    'Tarifas!B12',// España con permiso
+    'Tarifas!B14',// China tarifa
+    'Tarifas!B16',// México tarifa
     'Tarifas!G4:G8', // descuentos
     'Tarifas!J1:J3'  // entrega y tipo de cambio
   ];
@@ -790,7 +790,7 @@ function buildCotizacionPremiumMessage(payload, categoriaSeleccionada) {
   const nota = '📝 *Nota:* Los montos son aproximados y pueden variar según el tipo de cambio, el peso final y la clasificación real de la mercancía.';
 
   return [
-    '✅ *Cotización PREMIUM*',
+    '✅ *Cotización*',
     sep,
     `🆔 *ID:* ${payload.id}`,
     `🗓️ *Fecha:* ${payload.fechaLocal}`,
